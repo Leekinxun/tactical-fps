@@ -45,7 +45,7 @@ export class App {
         <section class="hud" id="hud" hidden aria-label="游戏状态">
           <div class="hud-top">
             <div class="round-chip"><small>回合</small><b id="round-value">01</b></div>
-            <div class="score-strip"><strong id="player-score">0</strong><span>BREACH <i id="phase-label">BUY</i> HOSTILE</span><strong id="bot-score">0</strong><small id="phase-timer">00:20</small></div>
+            <div class="score-strip"><strong id="player-score">0</strong><span><b id="score-left-label">BREACH</b> <i id="phase-label">BUY</i> <b id="score-right-label">HOSTILE</b></span><strong id="bot-score">0</strong><small id="phase-timer">00:20</small></div>
             <div class="hud-network"><span id="network-pill" hidden>ROOM ----- · 1/4</span><div class="backend-chip" id="hud-backend">WEBGL2</div></div>
           </div>
           <div class="objective"><span>目标</span><b id="objective-label">购买装备并准备</b><i id="target-count">4 个目标存活</i></div>
@@ -60,7 +60,7 @@ export class App {
           </div>
         </section>
         <section class="lobby-panel" id="lobby-panel" hidden>
-          <p class="kicker">LAN CO-OP PROTOCOL</p><h2>建立战术小队</h2><p>同一局域网内最多 4 名玩家合作对抗 Bot。房主先启动房间服务器，再分享五位房间码。</p>
+          <p class="kicker">LAN MIXED-SQUAD PROTOCOL</p><h2>建立混编对抗房间</h2><p>同一局域网内最多 4 名玩家自动平衡到 ALPHA 与 BRAVO；服务器为两队补充 Bot，组成规模相同的混编小队。</p>
           <label>呼号<input id="player-name" maxlength="18" value="Operator" autocomplete="nickname" /></label>
           <div class="lobby-actions"><button id="create-room-button"><small>新建</small><b>创建房间</b></button><button id="solo-button"><small>离线</small><b>单人训练</b></button></div>
           <div class="join-room"><input id="room-code-input" maxlength="5" placeholder="房间码" aria-label="五位房间码"/><button id="join-room-button">加入房间</button></div>
@@ -153,7 +153,7 @@ export class App {
       this.multiplayer = true;
       this.required<HTMLElement>("#lobby-panel").hidden = true;
       this.required<HTMLElement>("#hud").hidden = false;
-      status.textContent = `已连接房间 ${welcome.roomCode}`;
+      status.textContent = `已连接房间 ${welcome.roomCode} · ${welcome.team.toUpperCase()}`;
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : "连接房间失败";
     }
@@ -210,18 +210,25 @@ export class App {
     this.required<HTMLElement>("#reserve-value").textContent = String(snapshot.reserve);
     this.required<HTMLElement>("#weapon-label").textContent = snapshot.weaponName.toUpperCase();
     this.required<HTMLElement>("#movement-state").textContent = snapshot.reloading ? "更换弹匣" : snapshot.phase === "LIVE" ? snapshot.movementLabel : this.phaseText(snapshot.phase);
-    this.required<HTMLElement>("#target-count").textContent = `${snapshot.targetsAlive} 个 Bot 存活`;
+    this.required<HTMLElement>("#target-count").textContent = snapshot.multiplayer
+      ? `${snapshot.enemiesAlive} 敌方 / ${snapshot.alliesAlive} 友方存活`
+      : `${snapshot.targetsAlive} 个 Bot 存活`;
     this.required<HTMLElement>("#round-value").textContent = String(snapshot.round).padStart(2, "0");
     this.required<HTMLElement>("#phase-label").textContent = snapshot.phase;
     this.required<HTMLElement>("#phase-timer").textContent = this.formatTime(snapshot.phaseRemaining);
-    this.required<HTMLElement>("#player-score").textContent = String(snapshot.playerRounds);
-    this.required<HTMLElement>("#bot-score").textContent = String(snapshot.botRounds);
-    this.required<HTMLElement>("#objective-label").textContent = snapshot.phase === "BUY" ? "购买装备并准备" : snapshot.phase === "LIVE" ? "清除全部战术 Bot" : snapshot.phase === "ROUND_END" ? "回合经济结算" : "比赛已结束";
+    this.required<HTMLElement>("#player-score").textContent = String(snapshot.multiplayer ? snapshot.alphaRounds : snapshot.playerRounds);
+    this.required<HTMLElement>("#bot-score").textContent = String(snapshot.multiplayer ? snapshot.bravoRounds : snapshot.botRounds);
+    this.required<HTMLElement>("#score-left-label").textContent = snapshot.multiplayer ? "ALPHA" : "BREACH";
+    this.required<HTMLElement>("#score-right-label").textContent = snapshot.multiplayer ? "BRAVO" : "HOSTILE";
+    this.required<HTMLElement>("#objective-label").textContent = snapshot.phase === "BUY"
+      ? snapshot.multiplayer ? `你属于 ${snapshot.localTeam?.toUpperCase()} · 购买装备并准备` : "购买装备并准备"
+      : snapshot.phase === "LIVE" ? snapshot.multiplayer ? "歼灭敌方混编小队" : "清除全部战术 Bot"
+      : snapshot.phase === "ROUND_END" ? "回合经济结算" : "比赛已结束";
     this.required<HTMLElement>("#balance-value").textContent = `$${snapshot.balance.toLocaleString("en-US")}`;
     this.required<HTMLElement>("#loss-tier").textContent = `失败奖励 $${[1_900, 2_400, 2_900, 3_400][snapshot.lossTier].toLocaleString("en-US")}`;
     this.required<HTMLElement>("#buy-round").textContent = snapshot.round === 1 ? "PISTOL ROUND" : `ROUND ${snapshot.round}`;
     this.required<HTMLElement>("#bot-budget").textContent = snapshot.multiplayer
-      ? `房间 ${snapshot.playerCount}/4 · 服务器权威判定`
+      ? `ALPHA ${snapshot.alphaPlayers}P+${snapshot.alphaBots}B · BRAVO ${snapshot.bravoPlayers}P+${snapshot.bravoBots}B`
       : `敌方共享预算 $${snapshot.botBalance.toLocaleString("en-US")}`;
     this.required<HTMLElement>("#hud-backend").textContent = `${this.rendererBackend} · ${snapshot.navigationMode}`;
     const pickupPrompt = this.required<HTMLElement>("#pickup-prompt");
@@ -229,7 +236,7 @@ export class App {
     this.required<HTMLElement>("#pickup-label").textContent = snapshot.nearbyWeaponName ? `拾取 ${snapshot.nearbyWeaponName}` : "拾取武器";
     const networkPill = this.required<HTMLElement>("#network-pill");
     networkPill.hidden = !snapshot.multiplayer;
-    networkPill.textContent = snapshot.multiplayer ? `ROOM ${snapshot.roomCode ?? "-----"} · ${snapshot.playerCount}/4 · ${snapshot.connectionStatus.toUpperCase()}` : "";
+    networkPill.textContent = snapshot.multiplayer ? `ROOM ${snapshot.roomCode ?? "-----"} · ${snapshot.localTeam?.toUpperCase()} · ${snapshot.playerCount}/4 · ${snapshot.connectionStatus.toUpperCase()}` : "";
 
     const buyPanel = this.required<HTMLElement>("#buy-panel");
     buyPanel.hidden = snapshot.phase !== "BUY";
@@ -243,7 +250,9 @@ export class App {
     if (snapshot.phase === "MATCH_END") {
       const won = snapshot.playerRounds > snapshot.botRounds;
       this.required<HTMLElement>("#result-title").textContent = won ? "比赛胜利" : "比赛失败";
-      this.required<HTMLElement>("#result-copy").textContent = won ? "K-7 区域已完成清剿。" : "敌方控制了训练区域，重新调整经济与节奏。";
+      this.required<HTMLElement>("#result-copy").textContent = won
+        ? snapshot.multiplayer ? `${snapshot.localTeam?.toUpperCase()} 赢得混编小队对抗。` : "K-7 区域已完成清剿。"
+        : snapshot.multiplayer ? "敌方混编小队赢得比赛。" : "敌方控制了训练区域，重新调整经济与节奏。";
       if (snapshot.multiplayer) this.required<HTMLElement>("#result-copy").textContent += ` 再战投票 ${snapshot.rematchVotes}/${snapshot.playerCount}。`;
       this.required<HTMLElement>("#final-player-score").textContent = String(snapshot.playerRounds);
       this.required<HTMLElement>("#final-bot-score").textContent = String(snapshot.botRounds);

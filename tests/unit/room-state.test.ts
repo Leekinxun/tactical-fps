@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 // @ts-expect-error Server module intentionally runs as native Node ESM.
 import { RoomState } from "../../server/room-state.mjs";
 
+interface TestBot {
+  id: string;
+  team: "alpha" | "bravo";
+  weaponId: string;
+  position: { x: number; y: number; z: number };
+  health: number;
+  alive: boolean;
+}
+
 describe("authoritative RoomState", () => {
   it("caps rooms at four players", () => {
     const room = new RoomState("ABCDE", 0);
@@ -10,6 +19,37 @@ describe("authoritative RoomState", () => {
     expect(room.addPlayer("Three", 0)).not.toBeNull();
     expect(room.addPlayer("Four", 0)).not.toBeNull();
     expect(room.addPlayer("Five", 0)).toBeNull();
+  });
+
+  it("balances players across mixed squads and keeps at least one bot per team", () => {
+    const room = new RoomState("ABCDE", 0);
+    const players = [room.addPlayer("One", 0)!, room.addPlayer("Two", 0)!, room.addPlayer("Three", 0)!, room.addPlayer("Four", 0)!];
+    expect(players.map((player) => player.team)).toEqual(["alpha", "bravo", "alpha", "bravo"]);
+    expect(room.bots.filter((bot: TestBot) => bot.team === "alpha")).toHaveLength(1);
+    expect(room.bots.filter((bot: TestBot) => bot.team === "bravo")).toHaveLength(1);
+    expect(room.snapshot(0).players.every((player: { team?: string }) => player.team === "alpha" || player.team === "bravo")).toBe(true);
+  });
+
+  it("starts a solo-created room as equal two-member mixed squads", () => {
+    const room = new RoomState("ABCDE", 0);
+    room.addPlayer("One", 0)!;
+    expect(room.bots.filter((bot: TestBot) => bot.team === "alpha")).toHaveLength(1);
+    expect(room.bots.filter((bot: TestBot) => bot.team === "bravo")).toHaveLength(2);
+  });
+
+  it("queues players who join a live round without replacing active bots", () => {
+    const room = new RoomState("ABCDE", 0);
+    room.addPlayer("One", 0)!;
+    room.beginLive();
+    const botIds = room.bots.map((bot: TestBot) => bot.id);
+    const latePlayer = room.addPlayer("Late", 100)!;
+    expect(latePlayer).toMatchObject({ alive: false, health: 0, team: "bravo" });
+    expect(room.bots.map((bot: TestBot) => bot.id)).toEqual(botIds);
+    room.phase = "ROUND_END";
+    room.beginNextRound(1_000);
+    expect(latePlayer).toMatchObject({ alive: true, health: 100 });
+    expect(room.bots.filter((bot: TestBot) => bot.team === "alpha")).toHaveLength(1);
+    expect(room.bots.filter((bot: TestBot) => bot.team === "bravo")).toHaveLength(1);
   });
 
   it("rejects primary weapons during round one without charging", () => {
@@ -106,8 +146,9 @@ describe("authoritative RoomState", () => {
     const room = new RoomState("ABCDE", 0);
     const player = room.addPlayer("One", 0)!;
     room.beginLive();
-    room.bots[0].position = { x: 0, y: 1.72, z: -9 };
-    room.bots[0].health = 32;
+    const targetBot = room.bots.find((bot: TestBot) => bot.team !== player.team && bot.weaponId !== "px9")!;
+    targetBot.position = { x: 0, y: 1.72, z: -9 };
+    targetBot.health = 32;
     expect(room.fire(player.id, { shotId: "bot-kill", weaponId: "px9", origin: { ...player.position }, direction: { x: 0, y: 0, z: 1 } }, 100)).toMatchObject({ ok: true, killed: true });
     expect([...room.drops.values()]).toEqual([expect.objectContaining({ weaponId: "vx7" })]);
   });
@@ -170,7 +211,7 @@ describe("authoritative RoomState", () => {
     headshotRoom.beginLive();
     sniper.weaponId = "needle50";
     sniper.magazine = 5;
-    headshotRoom.bots[0].position = { x: 0, y: 1, z: -9 };
+    headshotRoom.bots.find((bot: TestBot) => bot.team !== sniper.team)!.position = { x: 0, y: 1, z: -9 };
     const headDirection = normalizeForTest({ x: 0, y: 2.12 - sniper.position.y, z: 5 });
     expect(headshotRoom.fire(sniper.id, { shotId: "headshot", weaponId: "needle50", origin: { ...sniper.position }, direction: headDirection }, 100)).toMatchObject({ hit: true, killed: true, headshot: true });
 
@@ -179,7 +220,7 @@ describe("authoritative RoomState", () => {
     shotgunRoom.beginLive();
     breacher.weaponId = "rift6";
     breacher.magazine = 6;
-    shotgunRoom.bots[0].position = { x: 0, y: 1, z: -9 };
+    shotgunRoom.bots.find((bot: TestBot) => bot.team !== breacher.team)!.position = { x: 0, y: 1, z: -9 };
     const bodyDirection = normalizeForTest({ x: 0, y: 1.45 - breacher.position.y, z: 5 });
     expect(shotgunRoom.fire(breacher.id, { shotId: "pellets", weaponId: "rift6", origin: { ...breacher.position }, direction: bodyDirection }, 100)).toMatchObject({ hit: true, killed: true });
   });
@@ -189,10 +230,59 @@ describe("authoritative RoomState", () => {
     const first = room.addPlayer("One", 0)!;
     const second = room.addPlayer("Two", 0)!;
     room.phase = "MATCH_END";
-    room.playerRounds = 7;
+    room.alphaRounds = 7;
     expect(room.voteRematch(first.id, 100)).toMatchObject({ ok: true, reset: false });
     expect(room.voteRematch(second.id, 100)).toMatchObject({ ok: true, reset: true });
-    expect(room.snapshot(100)).toMatchObject({ phase: "BUY", round: 1, playerRounds: 0, botRounds: 0, rematchVotes: 0 });
+    expect(room.snapshot(100)).toMatchObject({ phase: "BUY", round: 1, alphaRounds: 0, bravoRounds: 0, rematchVotes: 0 });
+  });
+
+  it("blocks friendly fire while allowing authoritative PvP damage", () => {
+    const room = new RoomState("ABCDE", 0);
+    const alpha = room.addPlayer("Alpha", 0)!;
+    const bravo = room.addPlayer("Bravo", 0)!;
+    room.beginLive();
+    const ally = room.bots.find((bot: TestBot) => bot.team === alpha.team)!;
+    ally.position = { x: 0, y: 1, z: -10 };
+    bravo.position = { x: 0, y: 1.72, z: -7 };
+    expect(room.fire(alpha.id, { shotId: "friendly-block", weaponId: "px9", origin: { ...alpha.position }, direction: { x: 0, y: 0, z: 1 } }, 100)).toMatchObject({ hit: false });
+    expect(ally.health).toBe(100);
+    expect(bravo.health).toBe(100);
+
+    ally.position = { x: -3, y: 1, z: -10 };
+    expect(room.fire(alpha.id, { shotId: "pvp-hit", weaponId: "px9", origin: { ...alpha.position }, direction: { x: 0, y: 0, z: 1 } }, 1_000)).toMatchObject({ hit: true });
+    expect(bravo.health).toBeLessThan(100);
+  });
+
+  it("settles rounds and economy for the surviving mixed squad", () => {
+    const room = new RoomState("ABCDE", 0);
+    const alpha = room.addPlayer("Alpha", 0)!;
+    const bravo = room.addPlayer("Bravo", 0)!;
+    room.beginLive();
+    bravo.alive = false;
+    bravo.health = 0;
+    for (const bot of room.bots.filter((candidate: TestBot) => candidate.team === "bravo") as TestBot[]) {
+      bot.alive = false;
+      bot.health = 0;
+    }
+    room.evaluateElimination();
+    expect(room.snapshot()).toMatchObject({ phase: "ROUND_END", alphaRounds: 1, bravoRounds: 0, bravoLossTier: 1 });
+    expect(alpha.balance).toBe(4_050);
+    expect(bravo.balance).toBe(2_700);
+  });
+
+  it("allows bots to acquire and damage enemy bots", () => {
+    const room = new RoomState("ABCDE", 0);
+    const alphaPlayer = room.addPlayer("Alpha", 0)!;
+    const bravoPlayer = room.addPlayer("Bravo", 0)!;
+    room.beginLive();
+    alphaPlayer.position = { x: 15, y: 1.72, z: -20 };
+    bravoPlayer.position = { x: 15, y: 1.72, z: 20 };
+    const alphaBot = room.bots.find((bot: TestBot) => bot.team === "alpha")!;
+    const bravoBot = room.bots.find((bot: TestBot) => bot.team === "bravo")!;
+    alphaBot.position = { x: -1, y: 1, z: -10 };
+    bravoBot.position = { x: -1, y: 1, z: -6 };
+    for (let tick = 1; tick <= 30 && alphaBot.health === 100 && bravoBot.health === 100; tick += 1) room.updateBots(0, tick * 1_000);
+    expect(Math.min(alphaBot.health, bravoBot.health)).toBeLessThan(100);
   });
 });
 

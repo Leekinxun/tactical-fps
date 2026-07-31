@@ -7,6 +7,8 @@ export interface NetworkVector3 {
   z: number;
 }
 
+export type TeamId = "alpha" | "bravo";
+
 export type ClientMessage =
   | { type: "hello"; protocolVersion: number; action: "create" | "join"; name: string; roomCode?: string; resumeToken?: string }
   | { type: "input"; sequence: number; position: NetworkVector3; yaw: number; pitch: number }
@@ -22,6 +24,7 @@ export type ClientMessage =
 export interface NetworkPlayerState {
   id: string;
   name: string;
+  team: TeamId;
   position: NetworkVector3;
   yaw: number;
   pitch: number;
@@ -40,6 +43,7 @@ export interface NetworkPlayerState {
 
 export interface NetworkBotState {
   id: string;
+  team: TeamId;
   position: NetworkVector3;
   health: number;
   alive: boolean;
@@ -60,8 +64,10 @@ export interface RoomSnapshot {
   phase: "BUY" | "LIVE" | "ROUND_END" | "MATCH_END";
   phaseRemaining: number;
   round: number;
-  playerRounds: number;
-  botRounds: number;
+  alphaRounds: number;
+  bravoRounds: number;
+  alphaLossTier: number;
+  bravoLossTier: number;
   rematchVotes: number;
   players: NetworkPlayerState[];
   bots: NetworkBotState[];
@@ -69,7 +75,7 @@ export interface RoomSnapshot {
 }
 
 export type ServerMessage =
-  | { type: "welcome"; protocolVersion: number; playerId: string; roomCode: string; resumeToken: string; resumed: boolean }
+  | { type: "welcome"; protocolVersion: number; playerId: string; roomCode: string; resumeToken: string; resumed: boolean; team: TeamId }
   | { type: "snapshot"; snapshot: RoomSnapshot }
   | { type: "event"; kind: "join" | "leave" | "hit" | "round" | "purchase" | "reload" | "drop" | "pickup" | "rematch"; message: string }
   | { type: "pong"; clientTime: number; serverTime: number }
