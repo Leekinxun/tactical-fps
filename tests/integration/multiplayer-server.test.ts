@@ -29,9 +29,12 @@ describe("multiplayer room server", () => {
     sockets.push(second);
     second.send(JSON.stringify({ type: "hello", protocolVersion: PROTOCOL_VERSION, action: "join", roomCode: firstWelcome.roomCode, name: "Bravo" }));
     const secondWelcome = await waitForMessage(second, (message) => message.type === "welcome");
-    expect(secondWelcome.roomCode).toBe(firstWelcome.roomCode);
+    expect(secondWelcome).toMatchObject({ roomCode: firstWelcome.roomCode, team: "bravo" });
     const joinedSnapshot = await waitForMessage(second, (message) => message.type === "snapshot" && message.snapshot.players.length === 2);
     expect(joinedSnapshot.snapshot.players.map((player: { name: string }) => player.name).sort()).toEqual(["Alpha", "Bravo"]);
+    expect(joinedSnapshot.snapshot.players.map((player: { team: string }) => player.team).sort()).toEqual(["alpha", "bravo"]);
+    expect(joinedSnapshot.snapshot.bots.filter((bot: { team: string }) => bot.team === "alpha")).toHaveLength(1);
+    expect(joinedSnapshot.snapshot.bots.filter((bot: { team: string }) => bot.team === "bravo")).toHaveLength(1);
 
     first.send(JSON.stringify({ type: "ready" }));
     second.send(JSON.stringify({ type: "ready" }));

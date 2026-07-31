@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION: 2;
+export const PROTOCOL_VERSION: 3;
 
 export type WeaponId = "px9" | "arc12" | "vx7" | "rift6" | "br4" | "needle50";
 export type WeaponSlot = "secondary" | "primary";
@@ -25,6 +25,7 @@ export interface SharedWeaponConfig {
 
 export const WEAPON_CATALOG: Readonly<Record<WeaponId, Readonly<SharedWeaponConfig>>>;
 export const PLAYER_SPAWNS: readonly Readonly<{ x: number; y: number; z: number }>[];
+export const TEAM_SPAWNS: Readonly<Record<"alpha" | "bravo", readonly Readonly<{ x: number; y: number; z: number }>[]>>;
 export const BOT_SPAWNS: readonly Readonly<{ x: number; y: number; z: number }>[];
 export const ARENA_BOXES: readonly Readonly<{
   name: string;

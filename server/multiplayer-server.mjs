@@ -113,9 +113,13 @@ function handleHello(socket, session, message, rooms) {
   session.initialized = true;
   room.sockets ??= new Set();
   room.sockets.add(socket);
-  send(socket, { type: "welcome", protocolVersion: PROTOCOL_VERSION, playerId: player.id, roomCode: room.code, resumeToken: player.resumeToken, resumed });
+  send(socket, { type: "welcome", protocolVersion: PROTOCOL_VERSION, playerId: player.id, roomCode: room.code, resumeToken: player.resumeToken, resumed, team: player.team });
   send(socket, { type: "snapshot", snapshot: room.snapshot() });
-  broadcastRoom(room, { type: "event", kind: "join", message: resumed ? `${player.name} 已恢复连接` : `${player.name} 已加入房间` });
+  const teamLabel = player.team.toUpperCase();
+  const joinMessage = resumed
+    ? `${player.name} 已恢复连接 · ${teamLabel}`
+    : player.alive ? `${player.name} 已加入 ${teamLabel}` : `${player.name} 已加入 ${teamLabel} · 下一回合入场`;
+  broadcastRoom(room, { type: "event", kind: "join", message: joinMessage });
 }
 
 function handleMessage(socket, session, message) {

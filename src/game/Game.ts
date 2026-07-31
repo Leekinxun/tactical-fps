@@ -1,6 +1,8 @@
 import "@babylonjs/core/Culling/ray";
 import "@babylonjs/core/Engines/Extensions/engine.alpha";
 import { Scene } from "@babylonjs/core/scene";
+import { Color3 } from "@babylonjs/core/Maths/math.color";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { createRenderer, type RendererBackend } from "./render/RendererFactory";
 import { PlayerController } from "./player/PlayerController";
@@ -16,7 +18,7 @@ import { BotBuyPlanner, BotEconomy } from "./economy/BotEconomy";
 import { DroppedWeaponSystem } from "./world/DroppedWeaponSystem";
 import { NetworkClient, type MultiplayerConnectOptions, type MultiplayerWelcome } from "../network/NetworkClient";
 import { RemotePlayerSystem } from "./network/RemotePlayerSystem";
-import type { RoomSnapshot } from "../shared/protocol";
+import type { RoomSnapshot, TeamId } from "../shared/protocol";
 
 export interface BuyItemSnapshot {
   id: WeaponId | "armor" | "helmet";
@@ -51,6 +53,15 @@ export interface GameSnapshot {
   phaseRemaining: number;
   playerRounds: number;
   botRounds: number;
+  alphaRounds: number;
+  bravoRounds: number;
+  localTeam: TeamId | null;
+  alliesAlive: number;
+  enemiesAlive: number;
+  alphaPlayers: number;
+  bravoPlayers: number;
+  alphaBots: number;
+  bravoBots: number;
   balance: number;
   lossTier: number;
   botBalance: number;
@@ -211,7 +222,7 @@ export class Game {
     this.matchStarted = true;
     this.running = false;
     this.connectionStatus = "connected";
-    this.emitSnapshot(welcome.resumed ? `已恢复房间 ${welcome.roomCode} 的战术状态` : `已加入房间 ${welcome.roomCode}`);
+    this.emitSnapshot(welcome.resumed ? `已恢复房间 ${welcome.roomCode} 的战术状态` : `已加入房间 ${welcome.roomCode} · ${welcome.team.toUpperCase()}`);
     return welcome;
   }
 
@@ -570,23 +581,40 @@ export class Game {
       const local = this.networkSnapshot.players.find((player) => player.id === this.network!.playerId);
       const nearby = this.player && this.drops ? this.drops.nearest(this.player.camera.position) : null;
       const weaponId = local?.weaponId ?? this.currentWeaponId;
+      const localTeam = local?.team ?? "alpha";
+      const enemyTeam: TeamId = localTeam === "alpha" ? "bravo" : "alpha";
+      const aliveForTeam = (team: TeamId) => this.networkSnapshot!.players.filter((player) => player.team === team && player.connected && player.alive).length
+        + this.networkSnapshot!.bots.filter((bot) => bot.team === team && bot.alive).length;
+      const alphaPlayers = this.networkSnapshot.players.filter((player) => player.team === "alpha" && player.connected).length;
+      const bravoPlayers = this.networkSnapshot.players.filter((player) => player.team === "bravo" && player.connected).length;
+      const alphaBots = this.networkSnapshot.bots.filter((bot) => bot.team === "alpha").length;
+      const bravoBots = this.networkSnapshot.bots.filter((bot) => bot.team === "bravo").length;
       this.callbacks.onSnapshot({
         health: local?.health ?? this.health,
         armor: local?.armor ?? this.armor,
-        helmet: false,
+        helmet: local?.helmet ?? false,
         reloading: this.networkReloadRequested || (local?.reloading ?? false),
         rematchVotes: this.networkSnapshot.rematchVotes,
         ammo: this.weapon.magazine,
         reserve: this.weapon.reserve,
-        targetsAlive: this.networkSnapshot.bots.filter((bot) => bot.alive).length,
+        targetsAlive: aliveForTeam(enemyTeam),
         movementLabel,
         round: this.networkSnapshot.round,
         phase: this.networkSnapshot.phase,
         phaseRemaining: this.networkSnapshot.phaseRemaining,
-        playerRounds: this.networkSnapshot.playerRounds,
-        botRounds: this.networkSnapshot.botRounds,
+        playerRounds: localTeam === "alpha" ? this.networkSnapshot.alphaRounds : this.networkSnapshot.bravoRounds,
+        botRounds: localTeam === "alpha" ? this.networkSnapshot.bravoRounds : this.networkSnapshot.alphaRounds,
+        alphaRounds: this.networkSnapshot.alphaRounds,
+        bravoRounds: this.networkSnapshot.bravoRounds,
+        localTeam,
+        alliesAlive: aliveForTeam(localTeam),
+        enemiesAlive: aliveForTeam(enemyTeam),
+        alphaPlayers,
+        bravoPlayers,
+        alphaBots,
+        bravoBots,
         balance: local?.balance ?? 0,
-        lossTier: 0,
+        lossTier: localTeam === "alpha" ? this.networkSnapshot.alphaLossTier : this.networkSnapshot.bravoLossTier,
         botBalance: 0,
         weaponName: getWeaponConfig(weaponId).displayName,
         navigationMode: this.navigation.mode,
@@ -619,6 +647,15 @@ export class Game {
       phaseRemaining: Math.ceil(this.match.remainingSeconds),
       playerRounds: this.match.playerRounds,
       botRounds: this.match.botRounds,
+      alphaRounds: this.match.playerRounds,
+      bravoRounds: this.match.botRounds,
+      localTeam: null,
+      alliesAlive: this.health > 0 ? 1 : 0,
+      enemiesAlive: this.targets.filter((target) => target.alive).length,
+      alphaPlayers: 1,
+      bravoPlayers: 0,
+      alphaBots: 0,
+      bravoBots: this.targets.length,
       balance: this.economy.balance,
       lossTier: this.economy.lossTier,
       botBalance: this.botEconomy.balance,
@@ -640,6 +677,8 @@ export class Game {
   private applyNetworkSnapshot(snapshot: RoomSnapshot): void {
     if (!this.player || !this.network?.playerId) return;
     const previousPhase = this.networkPhase;
+    const joiningSnapshot = this.networkSnapshot === null;
+    const previousRound = this.networkSnapshot?.round;
     const wasAlive = this.health > 0;
     this.networkSnapshot = snapshot;
     this.networkPhase = snapshot.phase;
@@ -656,7 +695,10 @@ export class Game {
       this.weapon.magazine = local.magazine;
       this.weapon.reserve = local.reserve;
       const authoritative = new Vector3(local.position.x, local.position.y, local.position.z);
-      if (Vector3.DistanceSquared(authoritative, this.player.camera.position) > 6.25) this.player.camera.position.copyFrom(authoritative);
+      if (previousRound !== snapshot.round || Vector3.DistanceSquared(authoritative, this.player.camera.position) > 6.25) {
+        this.player.camera.position.copyFrom(authoritative);
+        this.player.camera.rotation.y = local.yaw;
+      }
     }
     snapshot.bots.forEach((bot, index) => {
       const target = this.targets[index];
@@ -664,10 +706,16 @@ export class Game {
       target.alive = bot.alive;
       target.health = bot.health;
       target.root.position.set(bot.position.x, bot.position.y, bot.position.z);
+      if (target.root.material instanceof StandardMaterial) {
+        const allied = bot.team === local?.team;
+        target.root.material.diffuseColor = Color3.FromHexString(allied ? "#5b9d83" : "#ed7048");
+        target.root.material.emissiveColor = Color3.FromHexString(allied ? "#0b281f" : "#35120d");
+      }
       target.root.setEnabled(bot.alive);
     });
+    for (let index = snapshot.bots.length; index < this.targets.length; index += 1) this.targets[index]?.root.setEnabled(false);
     this.drops?.syncNetwork(snapshot.drops);
-    this.remotePlayers?.apply(snapshot.players, this.network.playerId);
+    if (local) this.remotePlayers?.apply(snapshot.players, this.network.playerId, local.team);
     if (snapshot.phase === "BUY") this.promptedNetworkRound = 0;
     if (snapshot.phase === "LIVE" && local?.alive && !this.running && this.promptedNetworkRound !== snapshot.round) {
       this.promptedNetworkRound = snapshot.round;
@@ -684,7 +732,7 @@ export class Game {
       this.running = false;
       this.player.setEnabled(false);
       if (document.pointerLockElement === this.canvas) document.exitPointerLock();
-      this.callbacks.onPause("你已阵亡 · 等待回合结束");
+      this.callbacks.onPause(joiningSnapshot ? "本回合进行中 · 下一回合入场" : "你已阵亡 · 等待回合结束");
     }
     this.emitSnapshot();
   }

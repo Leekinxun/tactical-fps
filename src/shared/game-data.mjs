@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export const WEAPON_CATALOG = Object.freeze({
   px9: { id: "px9", displayName: "PX-9 Service", weaponClass: "pistol", slot: "secondary", price: 0, killReward: 300, damage: 32, headMultiplier: 3.2, roundsPerMinute: 390, magazineSize: 12, reserveAmmo: 48, reloadMs: 1450, armorPenetration: 0.48, baseSpread: 0.006, movementSpread: 0.02 },
@@ -15,6 +15,16 @@ export const PLAYER_SPAWNS = Object.freeze([
   Object.freeze({ x: 2, y: 1.72, z: -14 }),
   Object.freeze({ x: 0, y: 1.72, z: -16 }),
 ]);
+
+export const TEAM_SPAWNS = Object.freeze({
+  alpha: PLAYER_SPAWNS,
+  bravo: Object.freeze([
+    Object.freeze({ x: 0, y: 1.72, z: 14 }),
+    Object.freeze({ x: 2, y: 1.72, z: 14 }),
+    Object.freeze({ x: -2, y: 1.72, z: 14 }),
+    Object.freeze({ x: 0, y: 1.72, z: 12 }),
+  ]),
+});
 
 export const BOT_SPAWNS = Object.freeze([
   Object.freeze({ x: -3.6, y: 1, z: 1 }),

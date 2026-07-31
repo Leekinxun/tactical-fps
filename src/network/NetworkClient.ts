@@ -1,4 +1,4 @@
-import type { ClientMessage, RoomSnapshot, ServerMessage } from "../shared/protocol";
+import type { ClientMessage, RoomSnapshot, ServerMessage, TeamId } from "../shared/protocol";
 import { encodeMessage, parseServerMessage, PROTOCOL_VERSION } from "../shared/protocol";
 import type { WeaponId } from "../game/combat/WeaponCatalog";
 
@@ -13,6 +13,7 @@ export interface MultiplayerWelcome {
   playerId: string;
   roomCode: string;
   resumed: boolean;
+  team: TeamId;
 }
 
 type NetworkEventKind = Extract<ServerMessage, { type: "event" }>["kind"];
@@ -113,7 +114,7 @@ export class NetworkClient {
           this.roomCode = message.roomCode;
           this.resumeToken = message.resumeToken;
           this.onStatus("connected");
-          resolve({ playerId: message.playerId, roomCode: message.roomCode, resumed: message.resumed });
+          resolve({ playerId: message.playerId, roomCode: message.roomCode, resumed: message.resumed, team: message.team });
         } else if (message.type === "snapshot") {
           this.snapshot = message.snapshot;
           this.onSnapshot(message.snapshot);

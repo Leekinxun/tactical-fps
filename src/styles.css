@@ -77,6 +77,7 @@ button:focus-visible { outline:2px solid var(--acid); outline-offset:4px; }
 .score-strip { position:absolute; left:50%; transform:translateX(-50%); display:grid; grid-template-columns:34px minmax(150px,auto) 34px; align-items:center; text-align:center; padding:5px 14px 8px; background:rgba(5,13,11,.82); border-top:2px solid var(--acid); }
 .score-strip strong { font:800 26px "Barlow Condensed",sans-serif; }
 .score-strip span { color:#aeb8b2; font:8px "IBM Plex Mono",monospace; letter-spacing:.13em; }
+.score-strip span b { font:inherit; }
 .score-strip span i { color:var(--acid); font-style:normal; padding:0 7px; }
 .score-strip small { grid-column:1/-1; color:var(--cream); font:600 10px "IBM Plex Mono",monospace; }
 .buy-panel { position:absolute; inset:0; z-index:25; padding:clamp(28px,5vw,72px); overflow:auto; background:linear-gradient(110deg,rgba(7,16,14,.98),rgba(10,24,20,.94)); }

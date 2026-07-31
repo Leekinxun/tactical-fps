@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ARENA_BOXES, BOT_SPAWNS, PLAYER_SPAWNS, WEAPON_CATALOG } from "../src/shared/game-data.mjs";
+import { ARENA_BOXES, TEAM_SPAWNS, WEAPON_CATALOG } from "../src/shared/game-data.mjs";
 
 export const RECONNECT_GRACE_MS = 15_000;
 export const EMPTY_ROOM_TTL_MS = 60_000;
@@ -7,6 +7,7 @@ export const EMPTY_ROOM_TTL_MS = 60_000;
 const MAX_PLAYER_SPEED = 7;
 const MAX_INPUT_GAP_SECONDS = 0.25;
 const PLAYER_RADIUS = 0.35;
+const TEAMS = ["alpha", "bravo"];
 const ARENA_COLLIDERS = ARENA_BOXES.map((item) => collider(item.dimensions, item.position));
 
 export class RoomState {
@@ -19,10 +20,10 @@ export class RoomState {
     this.phase = "BUY";
     this.phaseRemaining = 20;
     this.round = 1;
-    this.playerRounds = 0;
-    this.botRounds = 0;
-    this.lossTier = 0;
-    this.bots = createBots();
+    this.alphaRounds = 0;
+    this.bravoRounds = 0;
+    this.lossTiers = { alpha: 0, bravo: 0 };
+    this.bots = [];
     this.drops = new Map();
     this.nextDropId = 1;
     this.rematchVotes = new Set();
@@ -31,25 +32,27 @@ export class RoomState {
   addPlayer(name, now = Date.now()) {
     if (this.players.size >= 4) return null;
     const id = randomUUID();
-    const spawnIndex = firstAvailableSpawnIndex(this.players);
-    const spawn = PLAYER_SPAWNS[spawnIndex] ?? PLAYER_SPAWNS[0];
+    const team = this.chooseTeam();
+    const spawnIndex = firstAvailableSpawnIndex(this.players, team);
+    const spawn = TEAM_SPAWNS[team][spawnIndex] ?? TEAM_SPAWNS[team][0];
     const weapon = WEAPON_CATALOG.px9;
     const player = {
       id,
       resumeToken: randomUUID(),
       spawnIndex,
+      team,
       name: sanitizeName(name),
       position: { ...spawn },
-      yaw: 0,
+      yaw: team === "alpha" ? 0 : Math.PI,
       pitch: 0,
-      health: 100,
+      health: this.phase === "LIVE" ? 0 : 100,
       armor: 0,
       helmet: false,
       balance: 800,
       weaponId: "px9",
       magazine: weapon.magazineSize,
       reserve: weapon.reserveAmmo,
-      alive: true,
+      alive: this.phase !== "LIVE",
       ready: false,
       connected: true,
       disconnectedAt: null,
@@ -62,6 +65,7 @@ export class RoomState {
       processedShots: new Set(),
     };
     this.players.set(id, player);
+    if (this.phase !== "LIVE") this.rebalanceBots();
     this.lastActivityAt = now;
     this.lastPlayerLeftAt = null;
     return player;
@@ -96,6 +100,7 @@ export class RoomState {
     if (this.phase === "LIVE") this.dropPlayerWeapon(player);
     this.rematchVotes.delete(playerId);
     this.players.delete(playerId);
+    if (this.phase !== "LIVE") this.rebalanceBots();
     this.lastActivityAt = now;
     if (![...this.players.values()].some((candidate) => candidate.connected)) this.lastPlayerLeftAt ??= now;
     return true;
@@ -232,35 +237,45 @@ export class RoomState {
     const aim = normalize(message.direction);
     const pellets = weapon.pellets ?? 1;
     const spread = weapon.baseSpread + (now < player.movingUntil ? weapon.movementSpread : 0);
-    const damageByBot = new Map();
+    const damageByTarget = new Map();
     let headshot = false;
 
     for (let pellet = 0; pellet < pellets; pellet += 1) {
       const direction = applySpread(aim, spread, `${message.shotId}:${pellet}`);
-      const hit = nearestBotHit(origin, direction, this.bots);
+      const hit = nearestCombatantHit(origin, direction, this.players, this.bots, player.id);
       if (!hit) continue;
       const wallDistance = nearestColliderHit(origin, direction, 120);
       if (wallDistance !== null && wallDistance <= hit.along) continue;
+      if (hit.team === player.team) continue;
       const damage = weapon.damage * (hit.zone === "head" ? weapon.headMultiplier : 1);
       headshot ||= hit.zone === "head";
-      damageByBot.set(hit.bot, (damageByBot.get(hit.bot) ?? 0) + damage);
+      const accumulated = damageByTarget.get(hit.entity) ?? { kind: hit.kind, damage: 0, headshot: false };
+      accumulated.damage += damage;
+      accumulated.headshot ||= hit.zone === "head";
+      damageByTarget.set(hit.entity, accumulated);
     }
 
     let killed = false;
-    let hitBotId = null;
-    for (const [bot, damage] of damageByBot) {
-      if (!bot.alive) continue;
-      hitBotId ??= bot.id;
-      bot.health = Math.max(0, bot.health - damage);
-      if (bot.health > 0) continue;
-      bot.alive = false;
+    let hitTargetId = null;
+    for (const [target, hit] of damageByTarget) {
+      if (!target.alive) continue;
+      hitTargetId ??= target.id;
+      if (hit.kind === "player") damagePlayer(target, hit.damage, { headshot: hit.headshot, armorPenetration: weapon.armorPenetration });
+      else {
+        target.health = Math.max(0, target.health - hit.damage);
+        if (target.health === 0) target.alive = false;
+      }
+      if (target.alive) continue;
       killed = true;
-      const botWeapon = WEAPON_CATALOG[bot.weaponId];
-      this.createDrop(bot.weaponId, botWeapon.magazineSize, Math.floor(botWeapon.reserveAmmo * 0.5), botDropPosition(bot));
+      if (hit.kind === "player") this.dropPlayerWeapon(target);
+      else {
+        const botWeapon = WEAPON_CATALOG[target.weaponId];
+        this.createDrop(target.weaponId, botWeapon.magazineSize, Math.floor(botWeapon.reserveAmmo * 0.5), botDropPosition(target));
+      }
       player.balance = Math.min(16_000, player.balance + weapon.killReward);
     }
-    if (this.bots.every((bot) => !bot.alive)) this.endRound(true);
-    return { ok: true, hit: damageByBot.size > 0, botId: hitBotId, killed, headshot };
+    this.evaluateElimination();
+    return { ok: true, hit: damageByTarget.size > 0, targetId: hitTargetId, killed, headshot };
   }
 
   voteRematch(playerId, now = Date.now()) {
@@ -288,7 +303,7 @@ export class RoomState {
     if (this.phase === "LIVE") {
       this.phaseRemaining = Math.max(0, this.phaseRemaining - deltaSeconds);
       this.updateBots(deltaSeconds, now);
-      if (this.phaseRemaining === 0) this.endRound(false);
+      if (this.phaseRemaining === 0) this.endRound(this.timeoutWinner());
       return;
     }
     if (this.phase === "ROUND_END") {
@@ -304,11 +319,13 @@ export class RoomState {
       phase: this.phase,
       phaseRemaining: Math.ceil(this.phaseRemaining),
       round: this.round,
-      playerRounds: this.playerRounds,
-      botRounds: this.botRounds,
+      alphaRounds: this.alphaRounds,
+      bravoRounds: this.bravoRounds,
+      alphaLossTier: this.lossTiers.alpha,
+      bravoLossTier: this.lossTiers.bravo,
       rematchVotes: this.rematchVotes.size,
       players: [...this.players.values()].map(publicPlayer),
-      bots: this.bots.map((bot) => ({ id: bot.id, position: { ...bot.position }, health: bot.health, alive: bot.alive, weaponId: bot.weaponId })),
+      bots: this.bots.map((bot) => ({ id: bot.id, team: bot.team, position: { ...bot.position }, health: bot.health, alive: bot.alive, weaponId: bot.weaponId })),
       drops: [...this.drops.values()].map((drop) => ({ ...drop, position: { ...drop.position } })),
     };
   }
@@ -324,16 +341,20 @@ export class RoomState {
     for (const player of this.players.values()) player.ready = false;
   }
 
-  endRound(playerWon) {
+  endRound(winnerTeam) {
     if (this.phase !== "LIVE") return;
-    if (playerWon) this.playerRounds += 1;
-    else this.botRounds += 1;
+    if (winnerTeam === "alpha") this.alphaRounds += 1;
+    if (winnerTeam === "bravo") this.bravoRounds += 1;
     for (const player of this.players.values()) {
-      const reward = playerWon ? 3250 : [1900, 2400, 2900, 3400][this.lossTier];
+      const won = player.team === winnerTeam;
+      const reward = winnerTeam === null ? 1900 : won ? 3250 : [1900, 2400, 2900, 3400][this.lossTiers[player.team]];
       player.balance = Math.min(16_000, player.balance + reward);
     }
-    this.lossTier = playerWon ? Math.max(0, this.lossTier - 1) : Math.min(3, this.lossTier + 1);
-    if (this.playerRounds >= 7 || this.botRounds >= 7) {
+    for (const team of TEAMS) {
+      if (winnerTeam === null) continue;
+      this.lossTiers[team] = team === winnerTeam ? Math.max(0, this.lossTiers[team] - 1) : Math.min(3, this.lossTiers[team] + 1);
+    }
+    if (this.alphaRounds >= 7 || this.bravoRounds >= 7) {
       this.phase = "MATCH_END";
       this.phaseRemaining = 0;
       this.rematchVotes.clear();
@@ -347,7 +368,7 @@ export class RoomState {
     this.round += 1;
     this.phase = "BUY";
     this.phaseRemaining = 20;
-    this.bots = createBots();
+    this.rebalanceBots(true);
     this.drops.clear();
     for (const player of this.players.values()) resetPlayerForRound(player, now);
   }
@@ -356,10 +377,10 @@ export class RoomState {
     this.phase = "BUY";
     this.phaseRemaining = 20;
     this.round = 1;
-    this.playerRounds = 0;
-    this.botRounds = 0;
-    this.lossTier = 0;
-    this.bots = createBots();
+    this.alphaRounds = 0;
+    this.bravoRounds = 0;
+    this.lossTiers = { alpha: 0, bravo: 0 };
+    this.rebalanceBots(true);
     this.drops.clear();
     this.rematchVotes.clear();
     for (const player of this.players.values()) {
@@ -372,30 +393,92 @@ export class RoomState {
   }
 
   updateBots(deltaSeconds, now) {
-    const alivePlayers = this.connectedPlayers().filter((player) => player.alive);
-    if (!alivePlayers.length) {
-      this.endRound(false);
-      return;
-    }
     for (const bot of this.bots) {
       if (!bot.alive) continue;
-      const target = alivePlayers.reduce((nearest, candidate) => distance(candidate.position, bot.position) < distance(nearest.position, bot.position) ? candidate : nearest);
-      const targetDistance = distance(bot.position, target.position);
-      if (targetDistance > 8) moveBotToward(bot, target.position, deltaSeconds * 1.35);
+      const enemies = [
+        ...this.connectedPlayers().filter((player) => player.alive && player.team !== bot.team).map((entity) => ({ kind: "player", entity })),
+        ...this.bots.filter((candidate) => candidate.alive && candidate.team !== bot.team).map((entity) => ({ kind: "bot", entity })),
+      ];
+      if (!enemies.length) continue;
+      const target = enemies.reduce((nearest, candidate) => distance(candidate.entity.position, bot.position) < distance(nearest.entity.position, bot.position) ? candidate : nearest);
+      const targetDistance = distance(bot.position, target.entity.position);
+      if (targetDistance > 8) moveBotToward(bot, target.entity.position, deltaSeconds * 1.35);
       if (targetDistance <= 20 && now >= bot.nextShotAt) {
         bot.nextShotAt = now + 850 + bot.index * 90;
         const origin = { x: bot.position.x, y: bot.position.y + 0.72, z: bot.position.z };
-        const shotDirection = normalize(subtract(target.position, origin));
+        const shotDirection = normalize(subtract(target.entity.position, origin));
         const wallDistance = nearestColliderHit(origin, shotDirection, targetDistance);
         if (wallDistance !== null && wallDistance < targetDistance - 0.5) continue;
         if (deterministicChance(now, bot.index) < Math.max(0.18, 0.58 - targetDistance * 0.015)) {
-          const wasAlive = target.alive;
-          damagePlayer(target, 18, deterministicChance(now + 37, bot.index));
-          if (wasAlive && !target.alive) this.dropPlayerWeapon(target);
+          const hit = nearestCombatantHit(origin, shotDirection, this.players, this.bots, bot.id);
+          if (!hit || hit.team === bot.team) continue;
+          const victim = hit.entity;
+          const wasAlive = victim.alive;
+          if (hit.kind === "player") damagePlayer(victim, Math.max(12, Math.round(WEAPON_CATALOG[bot.weaponId].damage * 0.55)), { headshot: hit.zone === "head", armorPenetration: WEAPON_CATALOG[bot.weaponId].armorPenetration });
+          else {
+            victim.health = Math.max(0, victim.health - Math.max(12, Math.round(WEAPON_CATALOG[bot.weaponId].damage * 0.55)));
+            if (victim.health === 0) victim.alive = false;
+          }
+          if (wasAlive && !victim.alive) {
+            if (hit.kind === "player") this.dropPlayerWeapon(victim);
+            else {
+              const weapon = WEAPON_CATALOG[victim.weaponId];
+              this.createDrop(victim.weaponId, weapon.magazineSize, Math.floor(weapon.reserveAmmo * 0.5), botDropPosition(victim));
+            }
+          }
         }
       }
     }
-    if (!this.connectedPlayers().some((player) => player.alive)) this.endRound(false);
+    this.evaluateElimination();
+  }
+
+  chooseTeam() {
+    const counts = Object.fromEntries(TEAMS.map((team) => [team, [...this.players.values()].filter((player) => player.team === team).length]));
+    if (counts.alpha !== counts.bravo) return counts.alpha < counts.bravo ? "alpha" : "bravo";
+    return "alpha";
+  }
+
+  rebalanceBots(reset = false) {
+    const humanCounts = Object.fromEntries(TEAMS.map((team) => [team, [...this.players.values()].filter((player) => player.team === team).length]));
+    const squadSize = Math.max(2, Math.max(humanCounts.alpha, humanCounts.bravo) + 1);
+    const existing = new Map(this.bots.map((bot) => [bot.id, bot]));
+    const nextBots = [];
+    for (const team of TEAMS) {
+      const occupied = new Set([...this.players.values()].filter((player) => player.team === team).map((player) => player.spawnIndex));
+      const slots = TEAM_SPAWNS[team].map((_, index) => index).filter((index) => !occupied.has(index)).slice(0, squadSize - humanCounts[team]);
+      for (const slot of slots) {
+        const id = `bot-${team}-${slot + 1}`;
+        const bot = existing.get(id) ?? createBot(team, slot);
+        if (reset) resetBotForRound(bot);
+        nextBots.push(bot);
+      }
+    }
+    this.bots = nextBots;
+  }
+
+  evaluateElimination() {
+    if (this.phase !== "LIVE") return;
+    const alphaAlive = this.teamStrength("alpha").alive;
+    const bravoAlive = this.teamStrength("bravo").alive;
+    if (alphaAlive === 0 && bravoAlive === 0) this.endRound(null);
+    else if (alphaAlive === 0) this.endRound("bravo");
+    else if (bravoAlive === 0) this.endRound("alpha");
+  }
+
+  timeoutWinner() {
+    const alpha = this.teamStrength("alpha");
+    const bravo = this.teamStrength("bravo");
+    if (alpha.alive !== bravo.alive) return alpha.alive > bravo.alive ? "alpha" : "bravo";
+    if (alpha.health !== bravo.health) return alpha.health > bravo.health ? "alpha" : "bravo";
+    return null;
+  }
+
+  teamStrength(team) {
+    const members = [
+      ...this.connectedPlayers().filter((player) => player.team === team && player.alive),
+      ...this.bots.filter((bot) => bot.team === team && bot.alive),
+    ];
+    return { alive: members.length, health: members.reduce((total, member) => total + member.health, 0) };
   }
 
   dropPlayerWeapon(player) {
@@ -425,14 +508,35 @@ export class RoomState {
   }
 }
 
-function createBots() {
-  return BOT_SPAWNS.map((position, index) => ({ id: `bot-${index + 1}`, index, level: position.y > 2 ? "bridge" : "ground", position: { ...position }, health: 100, alive: true, weaponId: index === 0 ? "vx7" : "px9", nextShotAt: 0 }));
+function createBot(team, slot) {
+  const spawn = TEAM_SPAWNS[team][slot] ?? TEAM_SPAWNS[team][0];
+  return {
+    id: `bot-${team}-${slot + 1}`,
+    team,
+    slot,
+    index: (team === "alpha" ? 0 : 4) + slot,
+    level: "ground",
+    position: { x: spawn.x, y: 1, z: spawn.z },
+    health: 100,
+    alive: true,
+    weaponId: slot === 1 ? "vx7" : "px9",
+    nextShotAt: 0,
+  };
+}
+
+function resetBotForRound(bot) {
+  const spawn = TEAM_SPAWNS[bot.team][bot.slot] ?? TEAM_SPAWNS[bot.team][0];
+  bot.position = { x: spawn.x, y: 1, z: spawn.z };
+  bot.health = 100;
+  bot.alive = true;
+  bot.nextShotAt = 0;
 }
 
 function publicPlayer(player) {
   return {
     id: player.id,
     name: player.name,
+    team: player.team,
     position: { ...player.position },
     yaw: player.yaw,
     pitch: player.pitch,
@@ -456,9 +560,10 @@ function resetPlayerForRound(player, now) {
     player.armor = 0;
     player.helmet = false;
   }
-  const spawn = PLAYER_SPAWNS[player.spawnIndex] ?? PLAYER_SPAWNS[0];
+  const spawn = TEAM_SPAWNS[player.team][player.spawnIndex] ?? TEAM_SPAWNS[player.team][0];
   const weapon = WEAPON_CATALOG[player.weaponId];
   player.position = { ...spawn };
+  player.yaw = player.team === "alpha" ? 0 : Math.PI;
   player.health = 100;
   player.magazine = weapon.magazineSize;
   player.reserve = weapon.reserveAmmo;
@@ -479,14 +584,14 @@ function equipWeapon(player, weaponId) {
   player.reloadCompletesAt = null;
 }
 
-function damagePlayer(player, rawDamage, hitRoll) {
-  let damage = player.helmet && hitRoll < 0.25 ? Math.ceil(rawDamage * 0.7) : rawDamage;
+function damagePlayer(player, rawDamage, { headshot = false, armorPenetration = 0.5 } = {}) {
+  let damage = player.helmet && headshot ? Math.ceil(rawDamage * 0.7) : rawDamage;
   if (player.armor > 0) {
-    const absorbed = Math.min(player.armor, 7);
+    const absorbed = Math.min(player.armor, Math.ceil(damage * (1 - armorPenetration) * 0.5));
     player.armor -= absorbed;
-    damage -= Math.floor(absorbed * 0.6);
+    damage -= absorbed;
   }
-  player.health = Math.max(0, player.health - damage);
+  player.health = Math.max(0, player.health - Math.max(1, Math.round(damage)));
   if (player.health === 0) player.alive = false;
 }
 
@@ -520,13 +625,25 @@ function moveBotCandidate(bot, target, distanceToMove) {
   if (candidates[0]) bot.position = candidates[0];
 }
 
-function nearestBotHit(origin, direction, bots) {
+function nearestCombatantHit(origin, direction, players, bots, excludedId) {
   let result = null;
-  for (const bot of bots) {
-    if (!bot.alive) continue;
-    const headAlong = raySphereDistance(origin, direction, { x: bot.position.x, y: bot.position.y + 1.12, z: bot.position.z }, 0.3);
-    const bodyAlong = raySphereDistance(origin, direction, { x: bot.position.x, y: bot.position.y + 0.45, z: bot.position.z }, 0.7);
-    const candidate = headAlong !== null ? { bot, zone: "head", along: headAlong } : bodyAlong !== null ? { bot, zone: "body", along: bodyAlong } : null;
+  const combatants = [
+    ...[...players.values()].filter((player) => player.connected).map((entity) => ({ kind: "player", entity })),
+    ...bots.map((entity) => ({ kind: "bot", entity })),
+  ];
+  for (const { kind, entity } of combatants) {
+    if (!entity.alive || entity.id === excludedId) continue;
+    const headCenter = kind === "player"
+      ? { x: entity.position.x, y: entity.position.y, z: entity.position.z }
+      : { x: entity.position.x, y: entity.position.y + 1.12, z: entity.position.z };
+    const bodyCenter = kind === "player"
+      ? { x: entity.position.x, y: entity.position.y - 0.62, z: entity.position.z }
+      : { x: entity.position.x, y: entity.position.y + 0.45, z: entity.position.z };
+    const headAlong = raySphereDistance(origin, direction, headCenter, 0.3);
+    const bodyAlong = raySphereDistance(origin, direction, bodyCenter, 0.7);
+    const candidate = headAlong !== null
+      ? { kind, entity, team: entity.team, zone: "head", along: headAlong }
+      : bodyAlong !== null ? { kind, entity, team: entity.team, zone: "body", along: bodyAlong } : null;
     if (candidate && candidate.along <= 120 && (!result || candidate.along < result.along)) result = candidate;
   }
   return result;
@@ -557,9 +674,9 @@ function seededUnit(value) {
   return (hash >>> 0) / 0x1_0000_0000;
 }
 
-function firstAvailableSpawnIndex(players) {
-  const used = new Set([...players.values()].map((player) => player.spawnIndex));
-  return PLAYER_SPAWNS.findIndex((_, index) => !used.has(index));
+function firstAvailableSpawnIndex(players, team) {
+  const used = new Set([...players.values()].filter((player) => player.team === team).map((player) => player.spawnIndex));
+  return TEAM_SPAWNS[team].findIndex((_, index) => !used.has(index));
 }
 
 function dropPositionForPlayer(player) {

@@ -4,10 +4,11 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
-import type { NetworkPlayerState } from "../../shared/protocol";
+import type { NetworkPlayerState, TeamId } from "../../shared/protocol";
 
 interface RemoteAvatar {
   root: Mesh;
+  material: StandardMaterial;
   targetPosition: Vector3;
   targetYaw: number;
 }
@@ -20,7 +21,7 @@ export class RemotePlayerSystem {
     this.scene = scene;
   }
 
-  apply(players: NetworkPlayerState[], localPlayerId: string): void {
+  apply(players: NetworkPlayerState[], localPlayerId: string, localTeam: TeamId): void {
     const activeIds = new Set(players.filter((player) => player.id !== localPlayerId).map((player) => player.id));
     for (const player of players) {
       if (player.id === localPlayerId) continue;
@@ -32,12 +33,15 @@ export class RemotePlayerSystem {
         material.emissiveColor = Color3.FromHexString("#0b281f");
         root.material = material;
         root.checkCollisions = false;
-        avatar = { root, targetPosition: new Vector3(player.position.x, player.position.y - 0.72, player.position.z), targetYaw: player.yaw };
+        avatar = { root, material, targetPosition: new Vector3(player.position.x, player.position.y - 0.72, player.position.z), targetYaw: player.yaw };
         root.position.copyFrom(avatar.targetPosition);
         this.avatars.set(player.id, avatar);
       }
       avatar.targetPosition.set(player.position.x, player.position.y - 0.72, player.position.z);
       avatar.targetYaw = player.yaw;
+      const allied = player.team === localTeam;
+      avatar.material.diffuseColor = Color3.FromHexString(allied ? "#5b9d83" : "#d86845");
+      avatar.material.emissiveColor = Color3.FromHexString(allied ? "#0b281f" : "#35120d");
       avatar.root.setEnabled(player.alive && player.connected);
     }
     for (const [id, avatar] of this.avatars) {
