@@ -1,0 +1,335 @@
+{
+  "asset": "m4a1",
+  "schema": "breachline.compact-mesh.v1",
+  "source": {
+    "title": "M4A1 Assault Rifle",
+    "author": "nisu / 3DModelsCC0",
+    "license": "CC0-1.0",
+    "assetUrl": "https://opengameart.org/content/m4a1-assault-rifle",
+    "downloadUrl": "https://opengameart.org/sites/default/files/m4a1_0.zip",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "archive": {
+      "path": "assets/sources/m4a1/m4a1_0.zip",
+      "sha256": "ed5779ec82718861964227e2aad2a900978ea087081154365d6d86246be62f0d",
+      "expectedSha256": "ed5779ec82718861964227e2aad2a900978ea087081154365d6d86246be62f0d",
+      "verified": true
+    }
+  },
+  "conversion": {
+    "script": "scripts/convert-m4a1.py",
+    "sourceCoordinateSystem": "After FBX Model transforms, source world space is Y-up with rifle barrel along -Z.",
+    "targetCoordinateSystem": "Y-up with rifle front/barrel along +Z.",
+    "positionTransform": "targetRaw(x,y,z)=(-source.x, source.y, -source.z), a 180 degree Y rotation; subtract Trigger center; scale to 0.90 total length.",
+    "normalTransform": "targetNormal=normalize(-source.nx, source.ny, -source.nz).",
+    "originAnchor": {
+      "model": "Trigger",
+      "targetRawCenter": [
+        0.0758566,
+        -4.7170896,
+        -2.5943317
+      ]
+    },
+    "scale": 0.010479213068333082,
+    "targetLength": 0.9,
+    "bounds": {
+      "min": [
+        -0.0342844,
+        -0.1373876,
+        -0.3112663
+      ],
+      "max": [
+        0.032369,
+        0.1416947,
+        0.5887337
+      ]
+    },
+    "omittedDegenerateTriangles": 51,
+    "windingVsNormals": {
+      "positiveDotTriangles": 9202,
+      "negativeDotTriangles": 5,
+      "interpretation": "Positive dot means triangle winding agrees with transformed vertex normals; no winding reversal applied."
+    },
+    "models": [
+      {
+        "model": "Magazine",
+        "role": "magazine",
+        "geometryId": 2531719508144,
+        "triangles": 716,
+        "bounds": {
+          "min": [
+            -0.0107886,
+            -0.1373876,
+            0.0438189
+          ],
+          "max": [
+            0.0107886,
+            0.0558077,
+            0.1352584
+          ]
+        }
+      },
+      {
+        "model": "Base",
+        "role": "body",
+        "geometryId": 2531719508656,
+        "triangles": 2677,
+        "bounds": {
+          "min": [
+            -0.0342844,
+            -0.0947667,
+            -0.1180528
+          ],
+          "max": [
+            0.0151947,
+            0.1031277,
+            0.134676
+          ]
+        }
+      },
+      {
+        "model": "Charging_Handle",
+        "role": "bolt",
+        "geometryId": 2531719512240,
+        "triangles": 124,
+        "bounds": {
+          "min": [
+            -0.0204948,
+            0.0894525,
+            -0.0866932
+          ],
+          "max": [
+            0.0204948,
+            0.0975408,
+            0.1091763
+          ]
+        }
+      },
+      {
+        "model": "Sight",
+        "role": "body",
+        "geometryId": 2531719507120,
+        "triangles": 812,
+        "bounds": {
+          "min": [
+            -0.0138486,
+            0.0972338,
+            -0.0646256
+          ],
+          "max": [
+            0.0138486,
+            0.1206391,
+            -0.0245665
+          ]
+        }
+      },
+      {
+        "model": "Sight_2",
+        "role": "body",
+        "geometryId": 2531719509168,
+        "triangles": 232,
+        "bounds": {
+          "min": [
+            -0.0054094,
+            0.1069031,
+            -0.0486813
+          ],
+          "max": [
+            0.0055463,
+            0.1360018,
+            -0.0421207
+          ]
+        }
+      },
+      {
+        "model": "Switch1",
+        "role": "body",
+        "geometryId": 2531719505072,
+        "triangles": 48,
+        "bounds": {
+          "min": [
+            -0.0175839,
+            0.1016636,
+            -0.0634911
+          ],
+          "max": [
+            -0.0111553,
+            0.1157984,
+            -0.0500482
+          ]
+        }
+      },
+      {
+        "model": "Switch2",
+        "role": "body",
+        "geometryId": 2531719509680,
+        "triangles": 78,
+        "bounds": {
+          "min": [
+            -0.01101,
+            0.1064511,
+            -0.0416362
+          ],
+          "max": [
+            0.0178483,
+            0.1178938,
+            -0.0272225
+          ]
+        }
+      },
+      {
+        "model": "Firemode_Selector",
+        "role": "body",
+        "geometryId": 2531719507632,
+        "triangles": 108,
+        "bounds": {
+          "min": [
+            0.0059581,
+            0.0090392,
+            -0.0428576
+          ],
+          "max": [
+            0.0131903,
+            0.0414835,
+            -0.0289166
+          ]
+        }
+      },
+      {
+        "model": "Trigger",
+        "role": "body",
+        "geometryId": 2531719510192,
+        "triangles": 68,
+        "bounds": {
+          "min": [
+            -0.0017729,
+            -0.0134792,
+            -0.0091988
+          ],
+          "max": [
+            0.0017729,
+            0.0213377,
+            0.016327
+          ]
+        }
+      },
+      {
+        "model": "Ejector_Lid",
+        "role": "bolt",
+        "geometryId": 2531759856752,
+        "triangles": 128,
+        "bounds": {
+          "min": [
+            -0.0257282,
+            0.0433504,
+            0.0274104
+          ],
+          "max": [
+            -0.0091004,
+            0.0618421,
+            0.1170491
+          ]
+        }
+      },
+      {
+        "model": "Ejector_2",
+        "role": "bolt",
+        "geometryId": 2531759855728,
+        "triangles": 36,
+        "bounds": {
+          "min": [
+            -0.0128749,
+            0.0674157,
+            0.0330673
+          ],
+          "max": [
+            -0.0007483,
+            0.0816713,
+            0.1081263
+          ]
+        }
+      },
+      {
+        "model": "Barrel",
+        "role": "body",
+        "geometryId": 2531759856240,
+        "triangles": 3534,
+        "bounds": {
+          "min": [
+            -0.032369,
+            0.0383601,
+            0.1315912
+          ],
+          "max": [
+            0.032369,
+            0.1416947,
+            0.5887337
+          ]
+        }
+      },
+      {
+        "model": "Stock",
+        "role": "body",
+        "geometryId": 2531759860336,
+        "triangles": 646,
+        "bounds": {
+          "min": [
+            -0.0166111,
+            -0.0576507,
+            -0.3112663
+          ],
+          "max": [
+            0.0166111,
+            0.0886966,
+            -0.0952974
+          ]
+        }
+      }
+    ],
+    "parts": [
+      {
+        "name": "m4a1_magazine",
+        "role": "magazine",
+        "vertices": 629,
+        "triangles": 716
+      },
+      {
+        "name": "m4a1_bolt",
+        "role": "bolt",
+        "vertices": 336,
+        "triangles": 288
+      },
+      {
+        "name": "m4a1_body",
+        "role": "body",
+        "vertices": 9440,
+        "triangles": 8203
+      }
+    ]
+  },
+  "hashes": {
+    "source": [
+      {
+        "path": "M4A1.fbx",
+        "sha256": "d66516a3455b975027556394b9afb92a1e9093d700ccf779aab223cd6ac4076e",
+        "bytes": 278384
+      },
+      {
+        "path": "M4A1_Base_Color.png",
+        "sha256": "e28fb02a6a1d951ec2d356fad8f267ba04da7d294bfa001eb3995549971e1b34",
+        "bytes": 518307
+      }
+    ],
+    "package": [
+      {
+        "path": "m4a1.json",
+        "sha256": "00f6439ce1b85b2f3b94eaf3c7ac94285b7f5d68bae22e98af9d9407e0121e8c",
+        "bytes": 894621
+      },
+      {
+        "path": "textures/M4A1_Base_Color.png",
+        "sha256": "e28fb02a6a1d951ec2d356fad8f267ba04da7d294bfa001eb3995549971e1b34",
+        "bytes": 518307
+      }
+    ]
+  }
+}

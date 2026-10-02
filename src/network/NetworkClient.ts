@@ -1,4 +1,4 @@
-import type { ClientMessage, RoomSnapshot, ServerMessage, TeamId } from "../shared/protocol";
+import type { ClientMessage, RoomSnapshot, ServerMessage, TeamId, WeaponSlot } from "../shared/protocol";
 import { encodeMessage, parseServerMessage, PROTOCOL_VERSION } from "../shared/protocol";
 import type { WeaponId } from "../game/combat/WeaponCatalog";
 
@@ -24,6 +24,7 @@ export class NetworkClient {
   resumeToken: string | null = null;
   snapshot: RoomSnapshot | null = null;
   onSnapshot: (snapshot: RoomSnapshot) => void = () => undefined;
+  onShot: (shooterId: string, weaponId: WeaponId) => void = () => undefined;
   onEvent: (message: string, kind: NetworkEventKind) => void = () => undefined;
   onStatus: (status: "connecting" | "connected" | "reconnecting" | "offline") => void = () => undefined;
   private socket: WebSocket | null = null;
@@ -60,12 +61,20 @@ export class NetworkClient {
     this.send({ type: "reload" });
   }
 
-  sendDrop(): void {
-    this.send({ type: "drop" });
+  sendDrop(item: "weapon" | "bomb" = "weapon"): void {
+    this.send({ type: "drop", item });
   }
 
   sendPickup(dropId: string): void {
     this.send({ type: "pickup", dropId });
+  }
+
+  sendInteract(active: boolean): void {
+    this.send({ type: "interact", active });
+  }
+
+  sendSwitchWeapon(slot: WeaponSlot): void {
+    this.send({ type: "switch_weapon", slot });
   }
 
   sendReady(): void {
@@ -76,7 +85,11 @@ export class NetworkClient {
     this.send({ type: "rematch" });
   }
 
-  sendBuy(itemId: WeaponId | "armor" | "helmet"): void {
+  sendLeave(): void {
+    this.send({ type: "leave" });
+  }
+
+  sendBuy(itemId: WeaponId | "armor" | "helmet" | "defuse-kit"): void {
     this.send({ type: "buy", itemId });
   }
 
@@ -118,7 +131,8 @@ export class NetworkClient {
         } else if (message.type === "snapshot") {
           this.snapshot = message.snapshot;
           this.onSnapshot(message.snapshot);
-        } else if (message.type === "event") this.onEvent(message.message, message.kind);
+        } else if (message.type === "shot") this.onShot(message.shooterId, message.weaponId);
+        else if (message.type === "event") this.onEvent(message.message, message.kind);
         else if (message.type === "error") {
           window.clearTimeout(timeout);
           if (reconnecting && message.code === "RESUME_EXPIRED") this.resumeToken = null;

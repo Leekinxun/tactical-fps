@@ -1,0 +1,175 @@
+{
+  "name": "original-tactical-weapons",
+  "createdBy": "scripts/blender/build_weapons.py",
+  "source": "Original procedural Blender modeling; no paid provider or third-party mesh input.",
+  "coordinateSystem": "Y-up, +Z barrel, trigger area near origin.",
+  "jsonSchema": "{parts:[{name,role,material?,positions,normals,uvs,indices}],textures,materials,bounds,muzzle,gripRight,gripLeft}",
+  "assets": [
+    {
+      "assetId": "px9",
+      "blend": "assets/blender/weapons/px9.blend",
+      "glb": "public/models/tactical-weapons/px9.glb",
+      "json": "public/models/tactical-weapons/px9.json",
+      "triangles": 5824,
+      "parts": 6,
+      "bounds": {
+        "min": [
+          -0.039257,
+          -0.226242,
+          -0.087127
+        ],
+        "max": [
+          0.039257,
+          0.065,
+          0.374192
+        ]
+      },
+      "muzzle": [
+        0.0,
+        0.0286,
+        0.379306
+      ],
+      "gripRight": [
+        0.0357,
+        -0.1092,
+        -0.025571
+      ],
+      "gripLeft": [
+        -0.02499,
+        -0.10504,
+        0.005029
+      ],
+      "sha256": {
+        "blend": "00efee468919445383b6722a455339b91e4725d4890a38015f2cfeb756e4322a",
+        "glb": "51b8c4c626af2bc699f533fcba1287dc9834a87c85924fb41224c00acde4f77f",
+        "json": "b216db155cc584ea73747eae373561fea55cb5145634c2a3c3ddd7ad46fe65b7"
+      },
+      "license": "Original procedural model created locally in Blender for this project."
+    },
+    {
+      "assetId": "vx7",
+      "blend": "assets/blender/weapons/vx7.blend",
+      "glb": "public/models/tactical-weapons/vx7.glb",
+      "json": "public/models/tactical-weapons/vx7.json",
+      "triangles": 5512,
+      "parts": 8,
+      "bounds": {
+        "min": [
+          -0.0289,
+          -0.195575,
+          -0.262802
+        ],
+        "max": [
+          0.04284,
+          0.05671,
+          0.417198
+        ]
+      },
+      "muzzle": [
+        0.0,
+        0.01378,
+        0.417198
+      ],
+      "gripRight": [
+        0.0272,
+        -0.106,
+        -0.036135
+      ],
+      "gripLeft": [
+        -0.0323,
+        0.0053,
+        0.282512
+      ],
+      "sha256": {
+        "blend": "22f0981a5eb389af5ad361a2c3d54f8b305bd6ce7dbbd6ec7dea3b98061de91b",
+        "glb": "ae9561f4377b668f43cbfa2510654f966205299e4f302fcc330992979653967a",
+        "json": "a8167a64baaa15cd6d4811f0d08e9215c408763bca53b7ae8db86e6f53315d01"
+      },
+      "license": "Original procedural model created locally in Blender for this project."
+    },
+    {
+      "assetId": "rift6",
+      "blend": "assets/blender/weapons/rift6.blend",
+      "glb": "public/models/tactical-weapons/rift6.glb",
+      "json": "public/models/tactical-weapons/rift6.json",
+      "triangles": 3996,
+      "parts": 7,
+      "bounds": {
+        "min": [
+          -0.0328,
+          -0.148137,
+          -0.411097
+        ],
+        "max": [
+          0.0328,
+          0.04601,
+          0.588903
+        ]
+      },
+      "muzzle": [
+        0.0,
+        0.0215,
+        0.591425
+      ],
+      "gripRight": [
+        0.0272,
+        -0.0903,
+        -0.028373
+      ],
+      "gripLeft": [
+        -0.0352,
+        -0.02236,
+        0.226986
+      ],
+      "sha256": {
+        "blend": "93e679f7a12a3b098646b053e2badba3566cb4d027e6bbf7e46ec2718c396755",
+        "glb": "11c1a02f6fb0409ae244aea4ee788838a823cc295f78240bd97bc7301bbe4bd0",
+        "json": "8ae58fc473af7889f2aae8e4d2481ae76dfe2e55fdfbaf732d3ad405b7b32c6a"
+      },
+      "license": "Original procedural model created locally in Blender for this project."
+    },
+    {
+      "assetId": "needle50",
+      "blend": "assets/blender/weapons/needle50.blend",
+      "glb": "public/models/tactical-weapons/needle50.glb",
+      "json": "public/models/tactical-weapons/needle50.json",
+      "triangles": 8488,
+      "parts": 10,
+      "bounds": {
+        "min": [
+          -0.03075,
+          -0.167086,
+          -0.432557
+        ],
+        "max": [
+          0.065716,
+          0.13244,
+          0.717443
+        ]
+      },
+      "muzzle": [
+        0.0,
+        0.02376,
+        0.718077
+      ],
+      "gripRight": [
+        0.027,
+        -0.1056,
+        -0.095068
+      ],
+      "gripLeft": [
+        -0.033,
+        0.0,
+        0.304216
+      ],
+      "sha256": {
+        "blend": "96f95af99e267c494853d631dc2dac790cc49cabda4f8d71edb6784b35c772ca",
+        "glb": "1f455d92b7f554c98869735fb82ad5ba12f6c0c959b29e7a4f89a3ea7c542b3b",
+        "json": "a9cba8c3220621ead57c46258515c4eee17d293a006cf4fc700c825f81a99433"
+      },
+      "license": "Original procedural model created locally in Blender for this project."
+    }
+  ],
+  "preview": "assets/blender/weapons/tactical-weapons-blender-showcase.png",
+  "previewSha256": "635623bde8f43668538d30d907799c9a0d9df9aa51eb0f5a2ca69ab7f295cb99"
+}

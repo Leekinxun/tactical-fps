@@ -1,4 +1,42 @@
-export const PROTOCOL_VERSION: 3;
+export const PROTOCOL_VERSION: 5;
+export const COMPETITIVE_RULES: Readonly<{
+  teamSize: 5;
+  maxPlayers: 10;
+  buySeconds: 15;
+  roundSeconds: 115;
+  roundEndSeconds: 6;
+  bombSeconds: 40;
+  plantSeconds: 3.2;
+  defuseSeconds: 10;
+  kitDefuseSeconds: 5;
+  halfRounds: 12;
+  roundsToWin: 13;
+}>;
+export const ARENA_BOUNDS: Readonly<{
+  minX: -64;
+  maxX: 64;
+  minZ: -72;
+  maxZ: 72;
+  playerPadding: 0.42;
+  groundWidth: 128;
+  groundDepth: 144;
+}>;
+export const BOMB_SITES: Readonly<Record<"A" | "B", Readonly<{ x: number; y: number; z: number; radius: number }>>>;
+export const MAP_NAV_POINTS: readonly Readonly<{
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  neighbors: readonly string[];
+}>[];
+export const MAP_ZONES: readonly Readonly<{
+  id: string;
+  label: string;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+}>[];
 
 export type WeaponId = "px9" | "arc12" | "vx7" | "rift6" | "br4" | "needle50";
 export type WeaponSlot = "secondary" | "primary";

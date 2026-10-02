@@ -1,0 +1,91 @@
+{
+  "asset": "industrial-tactical-operator",
+  "schema": "breachline.operator-mesh.v1",
+  "source": {
+    "type": "local-original-blender-procedural-model",
+    "script": "scripts/blender/build_operator.py",
+    "blend": "assets/blender/operator/industrial-tactical-operator.blend",
+    "preview": "assets/blender/operator/operator-preview.png",
+    "license": "MakeHuman CC0-1.0 body derivative with project-authored equipment and garments.",
+    "humanReference": {
+      "title": "MakeHuman base mesh",
+      "author": "MakeHuman Community",
+      "license": "CC0-1.0",
+      "sourceUrl": "https://github.com/makehumancommunity/makehuman/blob/master/makehuman/data/3dobjs/base.obj",
+      "licenseUrl": "https://github.com/makehumancommunity/makehuman/blob/master/LICENSE.md",
+      "sourcePath": "assets/blender/operator/reference/base.obj",
+      "sourceSha256": "8e761e6624b8f54536409135d1636da63b32486a90d4897f84e121d144f6fb4c",
+      "licensePath": "assets/blender/operator/reference/LICENSE.ASSETS.md",
+      "licenseSha256": "f6089cba01cb570a24712b41ab8a586ccd3cc5ef53dc266ca50b95c288956d2c",
+      "usedFor": "Runtime inner body proportions for head, torso, pelvis and legs."
+    }
+  },
+  "conversion": {
+    "sourceCoordinateSystem": "Blender X right, Y forward, Z up.",
+    "targetCoordinateSystem": "Runtime is Babylon left-handed: X right, Y up, Z forward. Blender source uses X right, Y forward, Z up.",
+    "positionTransform": "target(x,y,z)=(source.x, source.z, source.y)",
+    "normalTransform": "Procedural Blender parts use target(nx,ny,nz)=(source.nx, source.nz, source.ny) with reversed winding after axis swap; MakeHuman-derived runtime parts are emitted directly in Babylon coordinates with CCW winding.",
+    "bounds": {
+      "min": [
+        -0.31,
+        -0.5675,
+        -0.242
+      ],
+      "max": [
+        0.31,
+        0.605,
+        0.292
+      ]
+    },
+    "standingWorldBounds": {
+      "min": [
+        -0.400043,
+        -0.242,
+        -1.0275
+      ],
+      "max": [
+        0.404024,
+        0.414,
+        1.31
+      ]
+    },
+    "triangleCount": 20824,
+    "partCount": 72
+  },
+  "files": {
+    "operatorJson": {
+      "path": "public/models/operator/operator.json",
+      "sha256": "ee1110d72d3950ab642428e739b8e77cfcf336fe876c53ea507ba34ad4dad202"
+    },
+    "operatorGlb": {
+      "path": "public/models/operator/operator.glb",
+      "sha256": "a038e8b4281471a40ff118923675056127daf7e500787bfa143250ab3f9ae28a"
+    },
+    "sourceBlend": {
+      "path": "assets/blender/operator/industrial-tactical-operator.blend",
+      "sha256": "48de1328da358579c1d880ad93fcd80dbcc73d5caeba7d8c88b6eaa06510c67e"
+    },
+    "previewPng": {
+      "path": "assets/blender/operator/operator-preview.png",
+      "sha256": "0d38851d3f4e0a4c77c4c385af898b4200ea49de86570e99461a88e98f36103f"
+    },
+    "textures": {
+      "textures/operator-cloth-dark.png": {
+        "path": "public/models/operator/textures/operator-cloth-dark.png",
+        "sha256": "ddca3c74f07d0e73871544517b83c860610946679be65a065cf70c9edff70c5e"
+      },
+      "textures/operator-cloth.png": {
+        "path": "public/models/operator/textures/operator-cloth.png",
+        "sha256": "56fc598928d4b1feb213d47261cdf9375a5d6d4b5f7d69b8af559d64be2399d0"
+      },
+      "textures/operator-rubber.png": {
+        "path": "public/models/operator/textures/operator-rubber.png",
+        "sha256": "89e1d20b7ba60d62e6f6088c6928555766646c12afe2175073df3e39ef3cb7d1"
+      },
+      "textures/operator-vest.png": {
+        "path": "public/models/operator/textures/operator-vest.png",
+        "sha256": "78360978bea6c61569654f535a002b99b3ae3f4f5ca0f97622886946c6c69bb1"
+      }
+    }
+  }
+}

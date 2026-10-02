@@ -48,8 +48,11 @@ export class NavigationService {
   findPath(start: Vector3, end: Vector3): Vector3[] {
     if (this.plugin) {
       try {
-        const path = this.plugin.computePathSmooth(start, end, { maxSmoothPathPoints: 96, stepSize: 0.65, slop: 0.08 });
-        if (path.length > 1) return path;
+        const path = this.plugin.computePathSmooth(start, end, { maxSmoothPathPoints: 512, stepSize: 0.65, slop: 0.08 });
+        const last = path.at(-1);
+        // Recast can return a partial path when its point budget is exhausted.
+        // A truncated result must not become the bot's final straight step through a wall.
+        if (last && path.length > 1 && Math.hypot(last.x - end.x, last.z - end.z) < 1.5) return path;
       } catch {
         // Fall through to the deterministic tactical graph.
       }

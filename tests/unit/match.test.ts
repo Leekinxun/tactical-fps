@@ -32,4 +32,29 @@ describe("MatchState", () => {
     expect(match.botRounds).toBe(1);
     expect(match.lastRoundWon).toBe(false);
   });
+
+  it("switches attack and defense after the first half", () => {
+    const match = new MatchState({ buySeconds: 1, liveSeconds: 1, roundEndSeconds: 1, roundsToWin: 3, halfRounds: 1 });
+    expect(match.playerAttacking).toBe(true);
+    match.ready();
+    match.tick(1);
+    match.tick(1);
+    expect(match.round).toBe(2);
+    expect(match.playerAttacking).toBe(false);
+    match.ready();
+    match.tick(1);
+    expect(match.lastRoundWon).toBe(true);
+    expect(match.lastRoundReason).toBe("time");
+  });
+
+  it("keeps the round live after a plant until the objective resolves", () => {
+    const match = new MatchState({ buySeconds: 1, liveSeconds: 2, roundEndSeconds: 1, roundsToWin: 3 });
+    match.ready();
+    match.setBombPlanted(true);
+    expect(match.tick(3)).toBeNull();
+    expect(match.phase).toBe("LIVE");
+    match.endRound(true, "explosion");
+    expect(match.lastRoundReason).toBe("explosion");
+    expect(match.bombPlanted).toBe(false);
+  });
 });

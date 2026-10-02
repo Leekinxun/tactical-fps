@@ -1,3 +1,5 @@
+import { COMPETITIVE_RULES } from "../../shared/game-data.mjs";
+
 export type MatchPhase = "BUY" | "LIVE" | "ROUND_END" | "MATCH_END";
 
 export interface MatchTransition {
@@ -11,13 +13,15 @@ export interface MatchConfig {
   liveSeconds: number;
   roundEndSeconds: number;
   roundsToWin: number;
+  halfRounds?: number;
 }
 
 export const DEFAULT_MATCH_CONFIG: MatchConfig = {
-  buySeconds: 20,
-  liveSeconds: 120,
-  roundEndSeconds: 6,
-  roundsToWin: 7,
+  buySeconds: COMPETITIVE_RULES.buySeconds,
+  liveSeconds: COMPETITIVE_RULES.roundSeconds,
+  roundEndSeconds: COMPETITIVE_RULES.roundEndSeconds,
+  roundsToWin: COMPETITIVE_RULES.roundsToWin,
+  halfRounds: COMPETITIVE_RULES.halfRounds,
 };
 
 export class MatchState {
@@ -27,6 +31,8 @@ export class MatchState {
   botRounds = 0;
   remainingSeconds: number;
   lastRoundWon: boolean | null = null;
+  lastRoundReason: string | null = null;
+  bombPlanted = false;
   readonly results: boolean[] = [];
   private readonly config: MatchConfig;
 
@@ -35,15 +41,24 @@ export class MatchState {
     this.remainingSeconds = config.buySeconds;
   }
 
+  get playerAttacking(): boolean {
+    return this.round <= (this.config.halfRounds ?? COMPETITIVE_RULES.halfRounds);
+  }
+
+  setBombPlanted(planted: boolean): void {
+    this.bombPlanted = planted;
+  }
+
   tick(deltaSeconds: number): MatchTransition | null {
     if (this.phase === "MATCH_END") return null;
     this.remainingSeconds = Math.max(0, this.remainingSeconds - Math.max(0, deltaSeconds));
     if (this.remainingSeconds > 0) return null;
 
     if (this.phase === "BUY") return this.transitionTo("LIVE", this.config.liveSeconds);
-    if (this.phase === "LIVE") return this.endRound(false);
+    if (this.phase === "LIVE") return this.bombPlanted ? null : this.endRound(!this.playerAttacking, "time");
     if (this.phase === "ROUND_END") {
       this.round += 1;
+      this.bombPlanted = false;
       return this.transitionTo("BUY", this.config.buySeconds);
     }
     return null;
@@ -54,9 +69,11 @@ export class MatchState {
     return this.transitionTo("LIVE", this.config.liveSeconds);
   }
 
-  endRound(playerWon: boolean): MatchTransition | null {
+  endRound(playerWon: boolean, reason = "elimination"): MatchTransition | null {
     if (this.phase !== "LIVE") return null;
     this.lastRoundWon = playerWon;
+    this.lastRoundReason = reason;
+    this.bombPlanted = false;
     this.results.push(playerWon);
     if (playerWon) this.playerRounds += 1;
     else this.botRounds += 1;
@@ -74,6 +91,8 @@ export class MatchState {
     this.botRounds = 0;
     this.remainingSeconds = this.config.buySeconds;
     this.lastRoundWon = null;
+    this.lastRoundReason = null;
+    this.bombPlanted = false;
     this.results.length = 0;
   }
 

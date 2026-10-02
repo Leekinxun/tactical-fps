@@ -12,15 +12,15 @@ describe("EconomySystem", () => {
   it("settles idempotent rewards and saturating loss tiers", () => {
     const economy = new EconomySystem();
     expect(economy.settleRound("round-1", false)).toBe(true);
-    expect(economy.balance).toBe(2_700);
+    expect(economy.balance).toBe(2_200);
     expect(economy.lossTier).toBe(1);
     expect(economy.settleRound("round-1", false)).toBe(false);
     economy.settleRound("round-2", false);
     economy.settleRound("round-3", false);
     economy.settleRound("round-4", false);
-    expect(economy.lossTier).toBe(3);
+    expect(economy.lossTier).toBe(4);
     economy.settleRound("round-5", true);
-    expect(economy.lossTier).toBe(2);
+    expect(economy.lossTier).toBe(3);
     expect(economy.balance).toBeLessThanOrEqual(ECONOMY_CONFIG.moneyCap);
   });
 
@@ -57,5 +57,31 @@ describe("EconomySystem", () => {
     expect(economy.balance).toBe(800);
     economy.dropWeapon("br4");
     expect(economy.inventory.has("br4")).toBe(false);
+  });
+
+  it("applies objective rewards and the plant bonus once", () => {
+    const economy = new EconomySystem();
+    expect(economy.awardObjective("plant-1", "安放 C4")).toBe(true);
+    expect(economy.awardObjective("plant-1", "安放 C4")).toBe(false);
+    expect(economy.settleRound("loss-1", false, true)).toBe(true);
+    expect(economy.balance).toBe(3_300);
+  });
+
+  it("allows a defuse kit and resets money and equipment at halftime", () => {
+    const economy = new EconomySystem();
+    expect(economy.purchase("kit-1", "defuse-kit", 1, true).ok).toBe(true);
+    expect(economy.inventory.has("defuse-kit")).toBe(true);
+    economy.resetForHalf();
+    expect(economy.balance).toBe(800);
+    expect([...economy.inventory]).toEqual(["px9", "knife"]);
+    expect(economy.purchase("half-primary", "vx7", 13, true).reason).toBe("pistol-round");
+  });
+
+  it("allows damaged surviving armor to be replenished in a later buy phase", () => {
+    const economy = new EconomySystem();
+    expect(economy.purchase("armor-first", "armor", 1, true).ok).toBe(true);
+    economy.settleRound("round-win", true);
+    expect(economy.purchase("armor-repair", "armor", 2, true, 42).ok).toBe(true);
+    expect(economy.purchase("armor-duplicate", "armor", 2, true, 100).reason).toBe("already-owned");
   });
 });

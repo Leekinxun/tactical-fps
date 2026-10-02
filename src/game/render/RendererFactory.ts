@@ -1,3 +1,7 @@
+import "@babylonjs/core/Engines/WebGPU/Extensions/engine.dynamicTexture";
+import "@babylonjs/core/Engines/WebGPU/Extensions/engine.multiRender";
+import "@babylonjs/core/Engines/WebGPU/Extensions/engine.rawTexture";
+import "@babylonjs/core/Engines/Extensions/engine.rawTexture";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { WebGPUEngine } from "@babylonjs/core/Engines/webgpuEngine";
 import type { AbstractEngine } from "@babylonjs/core/Engines/abstractEngine";
@@ -11,6 +15,15 @@ export interface RendererResult {
 }
 
 export async function createRenderer(canvas: HTMLCanvasElement): Promise<RendererResult> {
+  const requestedBackend = new URLSearchParams(window.location.search).get("renderer");
+  if (requestedBackend === "webgl") {
+    return {
+      engine: createWebGlEngine(canvas),
+      backend: "WebGL2",
+      fallbackReason: "WebGL2 was selected explicitly.",
+    };
+  }
+
   if (await WebGPUEngine.IsSupportedAsync) {
     try {
       const engine = new WebGPUEngine(canvas, {

@@ -1,0 +1,10 @@
+{
+  "author": "Mateusz Sadek / Poly Haven",
+  "license": "CC0-1.0",
+  "assetUrl": "https://polyhaven.com/a/service_pistol",
+  "licenseUrl": "https://polyhaven.com/license",
+  "downloads": {
+    "service_pistol.gltf": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/service_pistol/service_pistol_1k.gltf",
+    "service_pistol.bin": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/service_pistol/service_pistol.bin"
+  }
+}

@@ -1,3 +1,5 @@
+import { ARENA_BOXES, MAP_NAV_POINTS } from "../../../shared/game-data.mjs";
+
 export interface TacticalPoint {
   id: string;
   x: number;
@@ -6,19 +8,7 @@ export interface TacticalPoint {
   neighbors: string[];
 }
 
-export const K7_TACTICAL_POINTS: TacticalPoint[] = [
-  { id: "spawn", x: 0, y: 0, z: -14, neighbors: ["left-entry", "right-entry", "center-south"] },
-  { id: "left-entry", x: -11, y: 0, z: -12, neighbors: ["spawn", "left-mid"] },
-  { id: "right-entry", x: 11, y: 0, z: -12, neighbors: ["spawn", "right-mid"] },
-  { id: "center-south", x: 0, y: 0, z: -7, neighbors: ["spawn", "center"] },
-  { id: "left-mid", x: -12, y: 0, z: 1, neighbors: ["left-entry", "left-north", "center"] },
-  { id: "right-mid", x: 12, y: 0, z: 1, neighbors: ["right-entry", "right-north", "center"] },
-  { id: "center", x: 0, y: 0, z: 2, neighbors: ["center-south", "left-mid", "right-mid", "center-north"] },
-  { id: "left-north", x: -12, y: 0, z: 15, neighbors: ["left-mid", "north"] },
-  { id: "right-north", x: 12, y: 0, z: 15, neighbors: ["right-mid", "north"] },
-  { id: "center-north", x: 0, y: 0, z: 12, neighbors: ["center", "north"] },
-  { id: "north", x: 0, y: 0, z: 21, neighbors: ["left-north", "right-north", "center-north"] },
-];
+export const K7_TACTICAL_POINTS: TacticalPoint[] = MAP_NAV_POINTS.map((point) => ({ ...point, neighbors: [...point.neighbors] }));
 
 export class TacticalGraph {
   private readonly points: Map<string, TacticalPoint>;
@@ -64,16 +54,8 @@ export class TacticalGraph {
   }
 
   private nearest(position: { x: number; y: number; z: number }): TacticalPoint | null {
-    let best: TacticalPoint | null = null;
-    let bestDistance = Infinity;
-    for (const point of this.points.values()) {
-      const candidate = distance(point, position);
-      if (candidate < bestDistance) {
-        best = point;
-        bestDistance = candidate;
-      }
-    }
-    return best;
+    const nearest = [...this.points.values()].sort((a, b) => distance(a, position) - distance(b, position));
+    return nearest.find((point) => ARENA_BOXES.every((box) => !crossesBox(position, point, box))) ?? nearest[0] ?? null;
   }
 
   private reconstruct(cameFrom: Map<string, string>, currentId: string): TacticalPoint[] {
@@ -90,4 +72,27 @@ export class TacticalGraph {
 
 function distance(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function crossesBox(a: { x: number; z: number }, b: { x: number; z: number }, box: (typeof ARENA_BOXES)[number]): boolean {
+  const [width, , depth] = box.dimensions;
+  const [centerX, , centerZ] = box.position;
+  const bounds = [
+    [a.x, b.x - a.x, centerX - width / 2, centerX + width / 2],
+    [a.z, b.z - a.z, centerZ - depth / 2, centerZ + depth / 2],
+  ];
+  let entering = 0;
+  let exiting = 1;
+  for (const [start, delta, minimum, maximum] of bounds) {
+    if (Math.abs(delta) < 1e-8) {
+      if (start < minimum || start > maximum) return false;
+      continue;
+    }
+    const first = (minimum - start) / delta;
+    const second = (maximum - start) / delta;
+    entering = Math.max(entering, Math.min(first, second));
+    exiting = Math.min(exiting, Math.max(first, second));
+    if (entering > exiting) return false;
+  }
+  return true;
 }

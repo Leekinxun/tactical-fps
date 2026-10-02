@@ -128,12 +128,26 @@ function handleMessage(socket, session, message) {
   if (message.type === "input") room.applyInput(playerId, message);
   else if (message.type === "fire") {
     const result = room.fire(playerId, message);
+    if (result.ok) broadcastRoom(room, { type: "shot", shooterId: playerId, weaponId: message.weaponId }, true);
     if (result.hit) send(socket, { type: "event", kind: "hit", message: result.killed ? result.headshot ? "精准击破 · 目标清除" : "目标清除" : result.headshot ? "头部命中" : "命中确认" });
   } else if (message.type === "ready") room.setReady(playerId);
+  else if (message.type === "leave") {
+    const player = room.players.get(playerId);
+    if (player && room.removePlayer(playerId)) {
+      room.sockets?.delete(socket);
+      broadcastRoom(room, { type: "event", kind: "leave", message: `${player.name} 已退出房间` });
+    }
+    session.room = null;
+    session.playerId = null;
+    session.initialized = false;
+    socket.close(1000, "Left match");
+  }
   else if (message.type === "reload") sendResult(socket, "reload", room.reload(playerId));
-  else if (message.type === "drop") sendResult(socket, "drop", room.dropWeapon(playerId));
+  else if (message.type === "drop") sendResult(socket, "drop", message.item === "bomb" ? room.dropCarriedBomb(playerId) : room.dropWeapon(playerId));
   else if (message.type === "pickup") sendResult(socket, "pickup", room.pickupWeapon(playerId, message.dropId));
   else if (message.type === "buy") sendResult(socket, "purchase", room.purchase(playerId, message.itemId));
+  else if (message.type === "interact") sendResult(socket, "objective", room.interact(playerId, message.active));
+  else if (message.type === "switch_weapon") sendResult(socket, "objective", room.switchWeapon(playerId, message.slot));
   else if (message.type === "rematch") {
     const result = room.voteRematch(playerId);
     broadcastRoom(room, { type: "event", kind: "rematch", message: result.message });
@@ -165,9 +179,13 @@ function parseClientMessage(raw, initialized) {
     if (typeof message.shotId !== "string" || message.shotId.length < 1 || message.shotId.length > 96 || !isFiniteVector(message.origin) || !isFiniteVector(message.direction) || !WEAPON_CATALOG[message.weaponId]) return invalid("BAD_FIRE", "射击消息无效");
     return valid(message);
   }
-  if (["reload", "drop", "ready", "rematch"].includes(message.type)) return valid({ type: message.type });
+  if (["reload", "ready", "leave", "rematch"].includes(message.type)) return valid({ type: message.type });
+  if (message.type === "drop") return message.item === undefined || ["weapon", "bomb"].includes(message.item)
+    ? valid({ type: "drop", item: message.item }) : invalid("BAD_DROP", "丢弃消息无效");
+  if (message.type === "interact") return typeof message.active === "boolean" ? valid({ type: "interact", active: message.active }) : invalid("BAD_INTERACT", "交互消息无效");
+  if (message.type === "switch_weapon") return ["primary", "secondary"].includes(message.slot) ? valid({ type: "switch_weapon", slot: message.slot }) : invalid("BAD_SWITCH", "武器切换消息无效");
   if (message.type === "pickup") return typeof message.dropId === "string" && /^drop-\d+$/.test(message.dropId) ? valid({ type: "pickup", dropId: message.dropId }) : invalid("BAD_PICKUP", "拾取消息无效");
-  if (message.type === "buy") return [...Object.keys(WEAPON_CATALOG), "armor", "helmet"].includes(message.itemId) ? valid({ type: "buy", itemId: message.itemId }) : invalid("BAD_PURCHASE", "购买消息无效");
+  if (message.type === "buy") return [...Object.keys(WEAPON_CATALOG), "armor", "helmet", "defuse-kit"].includes(message.itemId) ? valid({ type: "buy", itemId: message.itemId }) : invalid("BAD_PURCHASE", "购买消息无效");
   if (message.type === "ping") return Number.isFinite(message.clientTime) ? valid({ type: "ping", clientTime: message.clientTime }) : invalid("BAD_PING", "延迟消息无效");
   return invalid("UNKNOWN_MESSAGE", "未知消息类型");
 }
@@ -229,6 +247,7 @@ function createRoomCode(rooms) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const server = await createMultiplayerServer({ port: Number(process.env.BREACHLINE_PORT ?? 8787), host: process.env.BREACHLINE_HOST ?? "0.0.0.0" });
-  console.log(`BREACHLINE multiplayer server listening on ws://0.0.0.0:${server.port}`);
+  const host = process.env.BREACHLINE_HOST ?? "0.0.0.0";
+  const server = await createMultiplayerServer({ port: Number(process.env.BREACHLINE_PORT ?? 8787), host });
+  console.log(`BREACHLINE multiplayer server listening on ws://${host}:${server.port}`);
 }

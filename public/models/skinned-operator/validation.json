@@ -1,0 +1,41 @@
+{
+  "schema": "breachline.asset-validation.v1",
+  "staticChecks": {
+    "triangles": 45170,
+    "materialParts": 8,
+    "boneCount": 18,
+    "maxVertexInfluences": 4,
+    "maxWeightSumError": 1.0000000005838672e-07,
+    "finiteFloats": true,
+    "degenerateTriangles": 0,
+    "trianglesOpposingVertexNormals": 0,
+    "glbSkins": 1,
+    "glbMeshes": 1,
+    "glbPrimitives": 8,
+    "glbJoints": 18,
+    "exportRepair": "Remove zero-area triangles after runtime precision quantization and correct opposing split corner normals.",
+    "kneeAttachment": {
+      "construction": "Same connected trouser mesh with 0.01 m shaped thickness; no independent rigid shin plate.",
+      "sharedSeamVertices": 80,
+      "identicalSeamPositionsAndWeights": 80,
+      "kneeVertices": 209,
+      "verticesWithMixedThighShinWeights": 202
+    }
+  },
+  "visualReview": {
+    "method": "Blender Cycles standing three-quarter and manually deformed crouch pose, inspected with view_image",
+    "standing": "assets/blender/skinned-operator/standing-three-quarter.png",
+    "crouching": "assets/blender/skinned-operator/crouched-skin-stress.png",
+    "observations": [
+      "Replaced tiny helper UV atlas islands with physical-scale fabric UV; broad dye and wear variation is visible on sleeves and trousers in the inspected Blender renders.",
+      "Added shirt collar, reinforced cuffs, upper-arm pockets, pocket closures, trouser side seams and helmet rim/retention hardware.",
+      "Added separate plate pocket outlines and cummerbund webbing; slimmed boots and added sole welt and vamp seams.",
+      "Inspected full standing and bent-knee/bent-elbow frames; connected clothing remains joined at joints and hidden body does not protrude through boot toes.",
+      "Replaced floating rigid knee cups with shallow protection regions in the same continuous trouser topology; bent-knee Blender image inspected after re-export."
+    ],
+    "limitations": [
+      "This is original moderately detailed tactical clothing; fabric texture remains procedural and is not a CS2-equivalent scanned asset.",
+      "Tight weapon contact and wrist rotations require the runtime owner to inspect with the actual grip IK."
+    ]
+  }
+}

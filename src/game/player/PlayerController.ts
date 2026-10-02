@@ -2,6 +2,7 @@ import { Ray } from "@babylonjs/core/Culling/ray";
 import type { Scene } from "@babylonjs/core/scene";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { TEAM_SPAWNS } from "../../shared/game-data.mjs";
 
 export interface PlayerMotionSnapshot {
   crouching: boolean;
@@ -18,7 +19,8 @@ export class PlayerController {
   private enabled = false;
 
   constructor(scene: Scene, canvas: HTMLCanvasElement, sensitivity = 0.0018) {
-    this.camera = new UniversalCamera("player-camera", new Vector3(0, 1.72, -14), scene);
+    const spawn = TEAM_SPAWNS.alpha[0];
+    this.camera = new UniversalCamera("player-camera", new Vector3(spawn.x, spawn.y, spawn.z), scene);
     this.camera.minZ = 0.05;
     this.camera.fov = 1.12;
     this.camera.inertia = 0.08;

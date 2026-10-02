@@ -1,0 +1,46 @@
+{
+  "schema": "breachline.asset-provenance.v1",
+  "name": "continuous-skinned-tactical-operator",
+  "source": {
+    "author": "MakeHuman Community",
+    "license": "CC0-1.0",
+    "url": "https://github.com/makehumancommunity/makehuman/blob/master/makehuman/data/3dobjs/base.obj",
+    "localPath": "assets/blender/operator/reference/base.obj",
+    "sha256": "8e761e6624b8f54536409135d1636da63b32486a90d4897f84e121d144f6fb4c"
+  },
+  "derivative": "Project-authored garment shaping, equipment, neutral fabric textures, analytic smooth skin weights and armature.",
+  "generator": "scripts/blender/build_skinned_operator.py",
+  "triangles": 45170,
+  "drawCalls": 8,
+  "boneCount": 18,
+  "bounds": {
+    "min": [
+      -0.629826,
+      -1.008,
+      -0.215
+    ],
+    "max": [
+      0.629826,
+      1.216965,
+      0.36028
+    ]
+  },
+  "files": {
+    "LICENSE.CC0.md": "f6089cba01cb570a24712b41ab8a586ccd3cc5ef53dc266ca50b95c288956d2c",
+    "README.md": "47faa10da051addee25e27a4e81284aa028d6ec092471635c4f0ed943566ea9b",
+    "operator.glb": "4de8fc6f501d9cb2efca981f8d87ca3caccdfafac39e6670d4bc1fa27fb066d3",
+    "operator.json": "2d154e73b8a361473c363ea419de91ad9de8d346b028c547b5499429c780aad6",
+    "textures/fabric-normal.png": "22ca2c9a346824e2c23d7074146e3cddd8e4be11a8f9b90fa6d4cb90e023aff7",
+    "textures/fabric.png": "507e53f7599556706e4c9fa5042269ee9f8a396205e2ba24689b95eee2f5be2a",
+    "validation.json": "c88253d240a4c022e22651d1abe7841542193f33f005ef7f01927b28a31df3cb"
+  },
+  "sourceFiles": {
+    "assets/blender/skinned-operator/operator.blend": "4bab02ea9e66a3e050e97aa0224ad218793821adfc986d7acc8b59bd8a110a76",
+    "assets/blender/skinned-operator/pose-review.blend": "a855cbee8141f887f44e41622bae42c4383fed168acf5279c7a3cdf6f46dfff5",
+    "scripts/blender/build_skinned_operator.py": "0f898929cd890c23278436bb855c2e0df74a81cc3793d8d2268d1db0572ef8b6"
+  },
+  "reviewImages": {
+    "assets/blender/skinned-operator/standing-three-quarter.png": "706e40fe86cbd2ef515878cef3dc03dec46701519a4b02290995c998d58685c4",
+    "assets/blender/skinned-operator/crouched-skin-stress.png": "12f0df7652eaeb3c8d882c19302686f0b07dcb90eb7bf304b0b148e6f1ebbc6a"
+  }
+}

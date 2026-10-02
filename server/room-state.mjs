@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ARENA_BOXES, TEAM_SPAWNS, WEAPON_CATALOG } from "../src/shared/game-data.mjs";
+import { ARENA_BOUNDS, ARENA_BOXES, BOMB_SITES, COMPETITIVE_RULES, MAP_NAV_POINTS, TEAM_SPAWNS, WEAPON_CATALOG } from "../src/shared/game-data.mjs";
 
 export const RECONNECT_GRACE_MS = 15_000;
 export const EMPTY_ROOM_TTL_MS = 60_000;
@@ -7,8 +7,17 @@ export const EMPTY_ROOM_TTL_MS = 60_000;
 const MAX_PLAYER_SPEED = 7;
 const MAX_INPUT_GAP_SECONDS = 0.25;
 const PLAYER_RADIUS = 0.35;
+const BOT_RADIUS = 0.42;
+const INTERACTION_MOVE_TOLERANCE = 0.03;
+const MOVEMENT_SPREAD_WINDOW_MS = 150;
+const MOVEMENT_SPREAD_DISTANCE = 0.025;
+const MAX_SHOT_DISTANCE = Math.hypot(ARENA_BOUNDS.maxX - ARENA_BOUNDS.minX, ARENA_BOUNDS.maxZ - ARENA_BOUNDS.minZ);
+const BOT_VIEW_DISTANCE = 36;
+const BOT_MEMORY_MS = 2_400;
+const BOT_REACTION_MS = 360;
 const TEAMS = ["alpha", "bravo"];
 const ARENA_COLLIDERS = ARENA_BOXES.map((item) => collider(item.dimensions, item.position));
+const NAV_POINT_BY_ID = new Map(MAP_NAV_POINTS.map((point) => [point.id, point]));
 
 export class RoomState {
   constructor(code, now = Date.now()) {
@@ -18,8 +27,14 @@ export class RoomState {
     this.lastPlayerLeftAt = null;
     this.players = new Map();
     this.phase = "BUY";
-    this.phaseRemaining = 20;
+    this.phaseRemaining = COMPETITIVE_RULES.buySeconds;
     this.round = 1;
+    this.attackingTeam = "alpha";
+    this.defendingTeam = "bravo";
+    this.bomb = emptyBomb();
+    this.bombInteraction = null;
+    this.bombPlantedAt = null;
+    this.lastRoundReason = null;
     this.alphaRounds = 0;
     this.bravoRounds = 0;
     this.lossTiers = { alpha: 0, bravo: 0 };
@@ -30,11 +45,11 @@ export class RoomState {
   }
 
   addPlayer(name, now = Date.now()) {
-    if (this.players.size >= 4) return null;
+    if (this.players.size >= COMPETITIVE_RULES.maxPlayers) return null;
     const id = randomUUID();
     const team = this.chooseTeam();
     const spawnIndex = firstAvailableSpawnIndex(this.players, team);
-    const spawn = TEAM_SPAWNS[team][spawnIndex] ?? TEAM_SPAWNS[team][0];
+    const spawn = this.spawnForTeam(team, spawnIndex);
     const weapon = WEAPON_CATALOG.px9;
     const player = {
       id,
@@ -48,8 +63,14 @@ export class RoomState {
       health: this.phase === "LIVE" ? 0 : 100,
       armor: 0,
       helmet: false,
+      hasDefuseKit: false,
       balance: 800,
       weaponId: "px9",
+      primaryWeaponId: null,
+      secondaryWeaponId: "px9",
+      activeSlot: "secondary",
+      primaryAmmo: null,
+      secondaryAmmo: { magazine: weapon.magazineSize, reserve: weapon.reserveAmmo },
       magazine: weapon.magazineSize,
       reserve: weapon.reserveAmmo,
       alive: this.phase !== "LIVE",
@@ -59,13 +80,18 @@ export class RoomState {
       lastInputAt: now,
       lastSequence: -1,
       movementCredit: 0,
+      movementWindowStartedAt: now,
+      movementWindowDistance: 0,
       movingUntil: 0,
       lastShotAt: -Infinity,
       reloadCompletesAt: null,
       processedShots: new Set(),
     };
     this.players.set(id, player);
-    if (this.phase !== "LIVE") this.rebalanceBots();
+    if (this.phase !== "LIVE") {
+      this.rebalanceBots();
+      this.assignBombCarrier();
+    }
     this.lastActivityAt = now;
     this.lastPlayerLeftAt = null;
     return player;
@@ -78,29 +104,41 @@ export class RoomState {
     player.disconnectedAt = null;
     player.lastInputAt = now;
     player.movementCredit = 0;
+    player.movementWindowStartedAt = now;
+    player.movementWindowDistance = 0;
+    player.movingUntil = 0;
     this.lastPlayerLeftAt = null;
     this.lastActivityAt = now;
     return player;
   }
 
   markDisconnected(playerId, now = Date.now()) {
+    this.processBomb(now);
     const player = this.players.get(playerId);
     if (!player || !player.connected) return false;
     player.connected = false;
     player.disconnectedAt = now;
     player.ready = false;
+    this.cancelBombInteraction(playerId);
+    if (this.bomb.carrierId === playerId) this.dropBomb(player.position);
     this.rematchVotes.delete(playerId);
     if (![...this.players.values()].some((candidate) => candidate.connected)) this.lastPlayerLeftAt = now;
     return true;
   }
 
   removePlayer(playerId, now = Date.now()) {
+    this.processBomb(now);
     const player = this.players.get(playerId);
     if (!player) return false;
     if (this.phase === "LIVE") this.dropPlayerWeapon(player);
+    this.cancelBombInteraction(playerId);
+    if (this.bomb.carrierId === playerId) this.dropBomb(player.position);
     this.rematchVotes.delete(playerId);
     this.players.delete(playerId);
-    if (this.phase !== "LIVE") this.rebalanceBots();
+    if (this.phase !== "LIVE") {
+      this.rebalanceBots();
+      this.assignBombCarrier();
+    }
     this.lastActivityAt = now;
     if (![...this.players.values()].some((candidate) => candidate.connected)) this.lastPlayerLeftAt ??= now;
     return true;
@@ -123,6 +161,7 @@ export class RoomState {
   }
 
   applyInput(playerId, input, now = Date.now()) {
+    this.processBomb(now);
     const player = this.players.get(playerId);
     if (!player?.connected || !player.alive || this.phase !== "LIVE") return false;
     if (!Number.isSafeInteger(input?.sequence) || input.sequence <= player.lastSequence || !isFiniteVector(input.position)) return false;
@@ -139,10 +178,17 @@ export class RoomState {
     }
 
     player.movementCredit = Math.max(0, player.movementCredit - travel);
+    if (now < player.movementWindowStartedAt || now - player.movementWindowStartedAt > MOVEMENT_SPREAD_WINDOW_MS) {
+      player.movementWindowStartedAt = now;
+      player.movementWindowDistance = 0;
+    }
+    player.movementWindowDistance += travel;
     player.position = { x: candidate.x, y: candidate.y, z: candidate.z };
+    if (this.bomb.carrierId === playerId) this.bomb.position = bombPosition(player.position);
+    if (this.bombInteraction?.actorId === playerId && (travel > 0.025 || !this.interactionIsValid())) this.cancelBombInteraction(playerId);
     player.yaw = finiteNumber(input.yaw, player.yaw, -Math.PI * 4, Math.PI * 4);
     player.pitch = finiteNumber(input.pitch, player.pitch, -1.55, 1.55);
-    if (travel > 0.025) player.movingUntil = now + 150;
+    if (travel > 0.0001 && player.movementWindowDistance > MOVEMENT_SPREAD_DISTANCE) player.movingUntil = now + MOVEMENT_SPREAD_WINDOW_MS;
     this.lastActivityAt = now;
     return true;
   }
@@ -171,10 +217,18 @@ export class RoomState {
       player.helmet = true;
       return { ok: true, message: "已购买战术头盔" };
     }
+    if (itemId === "defuse-kit") {
+      if (player.team !== this.defendingTeam) return { ok: false, message: "仅防守方可购买拆弹钳" };
+      if (player.hasDefuseKit) return { ok: false, message: "已拥有拆弹钳" };
+      if (player.balance < 400) return { ok: false, message: "余额不足" };
+      player.balance -= 400;
+      player.hasDefuseKit = true;
+      return { ok: true, message: "已购买拆弹钳" };
+    }
     const weapon = WEAPON_CATALOG[itemId];
     if (!weapon) return { ok: false, message: "未知装备" };
-    if (player.weaponId === itemId) return { ok: false, message: "已拥有该武器" };
-    if (this.round === 1 && weapon.slot === "primary") return { ok: false, message: "手枪局禁止购买主武器" };
+    if (player[weapon.slot === "primary" ? "primaryWeaponId" : "secondaryWeaponId"] === itemId) return { ok: false, message: "已拥有该武器" };
+    if ((this.round === 1 || this.round === COMPETITIVE_RULES.halfRounds + 1) && weapon.slot === "primary") return { ok: false, message: "手枪局禁止购买主武器" };
     if (player.balance < weapon.price) return { ok: false, message: "余额不足" };
     player.balance -= weapon.price;
     equipWeapon(player, itemId);
@@ -186,15 +240,36 @@ export class RoomState {
     if (!player?.connected || !player.alive || this.phase !== "LIVE" || player.reloadCompletesAt !== null) return { ok: false, message: "当前无法换弹" };
     const weapon = WEAPON_CATALOG[player.weaponId];
     if (player.magazine >= weapon.magazineSize || player.reserve <= 0) return { ok: false, message: "无需换弹" };
+    this.cancelBombInteraction(playerId);
     player.reloadCompletesAt = now + weapon.reloadMs;
     return { ok: true, message: "正在更换弹匣" };
   }
 
+  switchWeapon(playerId, slot) {
+    const player = this.players.get(playerId);
+    if (!player?.connected || !player.alive || !["BUY", "LIVE"].includes(this.phase) || !["primary", "secondary"].includes(slot)) return { ok: false, message: "当前无法切换武器" };
+    saveActiveWeapon(player);
+    const weaponId = slot === "primary" ? player.primaryWeaponId : player.secondaryWeaponId;
+    if (!weaponId) return { ok: false, message: "该栏位没有武器" };
+    this.cancelBombInteraction(playerId);
+    activateWeaponSlot(player, slot);
+    return { ok: true, message: `已切换至 ${WEAPON_CATALOG[weaponId].displayName}` };
+  }
+
   dropWeapon(playerId) {
     const player = this.players.get(playerId);
-    if (!player?.connected || !player.alive || this.phase !== "LIVE" || player.weaponId === "px9") return { ok: false, message: "当前武器无法丢弃" };
+    if (!player?.connected || !player.alive || this.phase !== "LIVE") return { ok: false, message: "当前武器无法丢弃" };
+    if (player.weaponId === "px9") return { ok: false, message: "当前武器无法丢弃" };
+    this.cancelBombInteraction(playerId);
     const dropped = this.dropPlayerWeapon(player);
     return dropped ? { ok: true, message: `已丢弃 ${WEAPON_CATALOG[dropped.weaponId].displayName}` } : { ok: false, message: "当前武器无法丢弃" };
+  }
+
+  dropCarriedBomb(playerId) {
+    const player = this.players.get(playerId);
+    if (!player?.connected || !player.alive || this.phase !== "LIVE" || player.team !== this.attackingTeam || this.bomb.carrierId !== playerId) return { ok: false, message: "当前没有可丢弃的 C4" };
+    this.dropBomb(player.position);
+    return { ok: true, message: "已丢弃 C4" };
   }
 
   pickupWeapon(playerId, dropId) {
@@ -207,16 +282,26 @@ export class RoomState {
     const wallDistance = nearestColliderHit(player.position, direction, pickupDistance);
     if (wallDistance !== null && wallDistance < pickupDistance - 0.2) return { ok: false, message: "武器被障碍物阻挡" };
 
+    this.cancelBombInteraction(playerId);
     this.drops.delete(dropped.id);
-    if (player.weaponId !== "px9") this.createDrop(player.weaponId, player.magazine, player.reserve, dropPositionForPlayer(player));
-    player.weaponId = dropped.weaponId;
-    player.magazine = dropped.magazine;
-    player.reserve = dropped.reserve;
-    player.reloadCompletesAt = null;
+    saveActiveWeapon(player);
+    const slot = WEAPON_CATALOG[dropped.weaponId].slot;
+    const existingId = slot === "primary" ? player.primaryWeaponId : player.secondaryWeaponId;
+    const existingAmmo = slot === "primary" ? player.primaryAmmo : player.secondaryAmmo;
+    if (existingId && existingId !== "px9") this.createDrop(existingId, existingAmmo.magazine, existingAmmo.reserve, dropPositionForPlayer(player));
+    if (slot === "primary") {
+      player.primaryWeaponId = dropped.weaponId;
+      player.primaryAmmo = { magazine: dropped.magazine, reserve: dropped.reserve };
+    } else {
+      player.secondaryWeaponId = dropped.weaponId;
+      player.secondaryAmmo = { magazine: dropped.magazine, reserve: dropped.reserve };
+    }
+    activateWeaponSlot(player, slot);
     return { ok: true, message: `已拾取 ${WEAPON_CATALOG[dropped.weaponId].displayName}` };
   }
 
   fire(playerId, message, now = Date.now()) {
+    this.processBomb(now);
     const player = this.players.get(playerId);
     if (!player?.connected || !player.alive || this.phase !== "LIVE") return { ok: false };
     const weapon = WEAPON_CATALOG[player.weaponId];
@@ -230,6 +315,7 @@ export class RoomState {
     if (directionLength < 0.9 || directionLength > 1.1) return { ok: false };
 
     player.processedShots.add(message.shotId);
+    this.cancelBombInteraction(playerId);
     if (player.processedShots.size > 256) player.processedShots.clear();
     player.lastShotAt = now;
     player.magazine -= 1;
@@ -244,7 +330,7 @@ export class RoomState {
       const direction = applySpread(aim, spread, `${message.shotId}:${pellet}`);
       const hit = nearestCombatantHit(origin, direction, this.players, this.bots, player.id);
       if (!hit) continue;
-      const wallDistance = nearestColliderHit(origin, direction, 120);
+      const wallDistance = nearestColliderHit(origin, direction, MAX_SHOT_DISTANCE);
       if (wallDistance !== null && wallDistance <= hit.along) continue;
       if (hit.team === player.team) continue;
       const damage = weapon.damage * (hit.zone === "head" ? weapon.headMultiplier : 1);
@@ -267,8 +353,10 @@ export class RoomState {
       }
       if (target.alive) continue;
       killed = true;
+      this.cancelBombInteraction(target.id);
       if (hit.kind === "player") this.dropPlayerWeapon(target);
       else {
+        if (this.bomb.carrierId === target.id) this.dropBomb(target.position);
         const botWeapon = WEAPON_CATALOG[target.weaponId];
         this.createDrop(target.weaponId, botWeapon.magazineSize, Math.floor(botWeapon.reserveAmmo * 0.5), botDropPosition(target));
       }
@@ -302,8 +390,11 @@ export class RoomState {
     }
     if (this.phase === "LIVE") {
       this.phaseRemaining = Math.max(0, this.phaseRemaining - deltaSeconds);
+      this.processBomb(now);
+      if (this.phase !== "LIVE") return;
       this.updateBots(deltaSeconds, now);
-      if (this.phaseRemaining === 0) this.endRound(this.timeoutWinner());
+      this.processBomb(now);
+      if (this.phase === "LIVE" && this.phaseRemaining === 0 && !this.isBombPlanted()) this.endRound(this.defendingTeam, "time_expired");
       return;
     }
     if (this.phase === "ROUND_END") {
@@ -319,13 +410,17 @@ export class RoomState {
       phase: this.phase,
       phaseRemaining: Math.ceil(this.phaseRemaining),
       round: this.round,
+      attackingTeam: this.attackingTeam,
+      defendingTeam: this.defendingTeam,
+      bomb: { ...this.bomb, position: { ...this.bomb.position } },
+      lastRoundReason: this.lastRoundReason,
       alphaRounds: this.alphaRounds,
       bravoRounds: this.bravoRounds,
       alphaLossTier: this.lossTiers.alpha,
       bravoLossTier: this.lossTiers.bravo,
       rematchVotes: this.rematchVotes.size,
       players: [...this.players.values()].map(publicPlayer),
-      bots: this.bots.map((bot) => ({ id: bot.id, team: bot.team, position: { ...bot.position }, health: bot.health, alive: bot.alive, weaponId: bot.weaponId })),
+      bots: this.bots.map(publicBot),
       drops: [...this.drops.values()].map((drop) => ({ ...drop, position: { ...drop.position } })),
     };
   }
@@ -337,12 +432,15 @@ export class RoomState {
   beginLive() {
     if (this.phase !== "BUY") return;
     this.phase = "LIVE";
-    this.phaseRemaining = 120;
+    this.phaseRemaining = COMPETITIVE_RULES.roundSeconds;
+    this.assignBombCarrier();
     for (const player of this.players.values()) player.ready = false;
   }
 
-  endRound(winnerTeam) {
+  endRound(winnerTeam, reason = "elimination") {
     if (this.phase !== "LIVE") return;
+    this.bombInteraction = null;
+    this.lastRoundReason = reason;
     if (winnerTeam === "alpha") this.alphaRounds += 1;
     if (winnerTeam === "bravo") this.bravoRounds += 1;
     for (const player of this.players.values()) {
@@ -354,29 +452,46 @@ export class RoomState {
       if (winnerTeam === null) continue;
       this.lossTiers[team] = team === winnerTeam ? Math.max(0, this.lossTiers[team] - 1) : Math.min(3, this.lossTiers[team] + 1);
     }
-    if (this.alphaRounds >= 7 || this.bravoRounds >= 7) {
+    if (this.alphaRounds >= COMPETITIVE_RULES.roundsToWin || this.bravoRounds >= COMPETITIVE_RULES.roundsToWin) {
       this.phase = "MATCH_END";
       this.phaseRemaining = 0;
       this.rematchVotes.clear();
     } else {
       this.phase = "ROUND_END";
-      this.phaseRemaining = 6;
+      this.phaseRemaining = COMPETITIVE_RULES.roundEndSeconds;
     }
   }
 
   beginNextRound(now = Date.now()) {
     this.round += 1;
+    if (this.round === COMPETITIVE_RULES.halfRounds + 1) {
+      this.attackingTeam = "bravo";
+      this.defendingTeam = "alpha";
+      this.lossTiers = { alpha: 0, bravo: 0 };
+      for (const player of this.players.values()) resetPlayerEconomy(player);
+    }
     this.phase = "BUY";
-    this.phaseRemaining = 20;
+    this.phaseRemaining = COMPETITIVE_RULES.buySeconds;
     this.rebalanceBots(true);
     this.drops.clear();
-    for (const player of this.players.values()) resetPlayerForRound(player, now);
+    this.bomb = emptyBomb();
+    this.bombInteraction = null;
+    this.bombPlantedAt = null;
+    this.lastRoundReason = null;
+    for (const player of this.players.values()) resetPlayerForRound(player, this.spawnForTeam(player.team, player.spawnIndex), now);
+    this.assignBombCarrier();
   }
 
   resetMatch(now = Date.now()) {
     this.phase = "BUY";
-    this.phaseRemaining = 20;
+    this.phaseRemaining = COMPETITIVE_RULES.buySeconds;
     this.round = 1;
+    this.attackingTeam = "alpha";
+    this.defendingTeam = "bravo";
+    this.bomb = emptyBomb();
+    this.bombInteraction = null;
+    this.bombPlantedAt = null;
+    this.lastRoundReason = null;
     this.alphaRounds = 0;
     this.bravoRounds = 0;
     this.lossTiers = { alpha: 0, bravo: 0 };
@@ -384,32 +499,222 @@ export class RoomState {
     this.drops.clear();
     this.rematchVotes.clear();
     for (const player of this.players.values()) {
-      player.balance = 800;
-      player.armor = 0;
-      player.helmet = false;
-      player.weaponId = "px9";
-      resetPlayerForRound(player, now);
+      resetPlayerEconomy(player);
+      resetPlayerForRound(player, this.spawnForTeam(player.team, player.spawnIndex), now);
     }
+    this.assignBombCarrier();
+  }
+
+  spawnForTeam(team, slot) {
+    const spawnSide = team === this.attackingTeam ? "alpha" : "bravo";
+    return TEAM_SPAWNS[spawnSide][slot] ?? TEAM_SPAWNS[spawnSide][0];
+  }
+
+  siteAt(position) {
+    return Object.entries(BOMB_SITES).find(([, site]) => planarDistance(position, site) <= site.radius)?.[0] ?? null;
+  }
+
+  isBombPlanted() {
+    return this.bomb.status === "planted" || this.bomb.status === "defusing";
+  }
+
+  assignBombCarrier() {
+    if (this.phase !== "BUY" && this.phase !== "LIVE") return;
+    const candidates = [
+      ...this.connectedPlayers().filter((player) => player.team === this.attackingTeam && player.alive),
+      ...this.bots.filter((bot) => bot.team === this.attackingTeam && bot.alive),
+    ];
+    const carrier = candidates[0];
+    if (!carrier) {
+      this.bomb = { ...emptyBomb(), position: bombPosition(this.spawnForTeam(this.attackingTeam, 0)) };
+      return;
+    }
+    this.bomb = { ...emptyBomb(), status: "carried", carrierId: carrier.id, position: bombPosition(carrier.position) };
+  }
+
+  dropBomb(position) {
+    if (!this.bomb.carrierId) return;
+    this.bombInteraction = null;
+    this.bomb = { ...this.bomb, status: "dropped", carrierId: null, planterId: null, site: null, progress: 0, position: bombPosition(position) };
+  }
+
+  pickupBomb(actorId) {
+    const actor = this.findCombatant(actorId);
+    if (!actor?.alive || actor.team !== this.attackingTeam || this.bomb.status !== "dropped" || planarDistance(actor.position, this.bomb.position) > 2) return false;
+    const pickupDistance = distance(actor.position, this.bomb.position);
+    const direction = normalize(subtract(this.bomb.position, actor.position));
+    const wallDistance = nearestColliderHit(actor.position, direction, pickupDistance);
+    if (wallDistance !== null && wallDistance < pickupDistance - 0.2) return false;
+    this.bomb = { ...this.bomb, status: "carried", carrierId: actorId, position: bombPosition(actor.position) };
+    return true;
+  }
+
+  interact(playerId, active, now = Date.now()) {
+    this.processBomb(now);
+    const player = this.players.get(playerId);
+    if (!player?.connected || !player.alive || this.phase !== "LIVE") return { ok: false, message: "当前无法交互" };
+    if (!active) {
+      this.cancelBombInteraction(playerId);
+      return { ok: true, message: "已停止交互" };
+    }
+    if (player.team === this.attackingTeam) {
+      if (this.pickupBomb(playerId)) return { ok: true, message: "已拾取 C4" };
+      if (this.bomb.carrierId === playerId && this.siteAt(player.position)) {
+        if (this.beginBombInteraction(playerId, "plant", now)) return { ok: true, message: "正在安放 C4" };
+      }
+      return { ok: false, message: "需要携带 C4 并进入爆破点" };
+    }
+    if (this.isBombPlanted() && planarDistance(player.position, this.bomb.position) <= 2.5) {
+      if (this.beginBombInteraction(playerId, "defuse", now)) return { ok: true, message: "正在拆除 C4" };
+    }
+    return { ok: false, message: "需要靠近已安放的 C4" };
+  }
+
+  beginBombInteraction(actorId, kind, now) {
+    if (this.bombInteraction) return false;
+    const actor = this.findCombatant(actorId);
+    if (!actor?.alive || ("connected" in actor && !actor.connected) || this.phase !== "LIVE") return false;
+    if (kind === "plant") {
+      const site = this.siteAt(actor.position);
+      if (actor.team !== this.attackingTeam || this.bomb.carrierId !== actorId || !site) return false;
+      this.cancelReloadForInteraction(actor, now);
+      this.bombInteraction = { actorId, kind, startedAt: now, site, startedPosition: { ...actor.position } };
+      this.bomb.status = "planting";
+      this.bomb.site = site;
+      this.bomb.planterId = actorId;
+      this.bomb.progress = 0;
+      return true;
+    }
+    if (kind === "defuse" && actor.team === this.defendingTeam && this.isBombPlanted() && planarDistance(actor.position, this.bomb.position) <= 2.5) {
+      this.cancelReloadForInteraction(actor, now);
+      this.bombInteraction = { actorId, kind, startedAt: now, site: this.bomb.site, startedPosition: { ...actor.position } };
+      this.bomb.status = "defusing";
+      this.bomb.defuserId = actorId;
+      this.bomb.progress = 0;
+      return true;
+    }
+    return false;
+  }
+
+  cancelReloadForInteraction(actor, now) {
+    if (!("reloadCompletesAt" in actor)) return;
+    this.completeReload(actor, now);
+    actor.reloadCompletesAt = null;
+  }
+
+  cancelBombInteraction(actorId) {
+    if (this.bombInteraction?.actorId !== actorId) return false;
+    if (this.bombInteraction.kind === "plant") {
+      this.bomb.status = "carried";
+      this.bomb.site = null;
+      this.bomb.planterId = null;
+    } else {
+      this.bomb.status = "planted";
+      this.bomb.defuserId = null;
+    }
+    this.bomb.progress = 0;
+    this.bombInteraction = null;
+    return true;
+  }
+
+  interactionIsValid() {
+    const interaction = this.bombInteraction;
+    if (!interaction) return false;
+    const actor = this.findCombatant(interaction.actorId);
+    if (!actor?.alive || ("connected" in actor && !actor.connected)) return false;
+    if (distance(actor.position, interaction.startedPosition) > INTERACTION_MOVE_TOLERANCE) return false;
+    if (interaction.kind === "plant") return actor.team === this.attackingTeam && this.bomb.carrierId === actor.id && this.siteAt(actor.position) === interaction.site;
+    return actor.team === this.defendingTeam && this.isBombPlanted() && planarDistance(actor.position, this.bomb.position) <= 2.5;
+  }
+
+  processBomb(now) {
+    if (this.phase !== "LIVE") return;
+    const carrier = this.bomb.carrierId ? this.findCombatant(this.bomb.carrierId) : null;
+    if (carrier?.alive) this.bomb.position = bombPosition(carrier.position);
+    else if (this.bomb.carrierId) this.dropBomb(this.bomb.position);
+    if (this.isBombPlanted() && this.bombPlantedAt !== null) {
+      const remaining = Math.max(0, COMPETITIVE_RULES.bombSeconds - (now - this.bombPlantedAt) / 1000);
+      this.bomb.remainingSeconds = remaining;
+      this.phaseRemaining = remaining;
+      const interaction = this.bombInteraction;
+      const defuser = interaction?.kind === "defuse" ? this.findCombatant(interaction.actorId) : null;
+      const defuseDuration = defuser?.hasDefuseKit ? COMPETITIVE_RULES.kitDefuseSeconds : COMPETITIVE_RULES.defuseSeconds;
+      const defuseFinishAt = interaction?.kind === "defuse" ? interaction.startedAt + defuseDuration * 1000 : Infinity;
+      const defuseCompletesInTime = defuseFinishAt <= this.bombPlantedAt + COMPETITIVE_RULES.bombSeconds * 1000 && now >= defuseFinishAt && this.interactionIsValid();
+      if (remaining === 0 && !defuseCompletesInTime) {
+        this.bomb.status = "exploded";
+        this.bomb.defuserId = null;
+        this.bomb.progress = 0;
+        this.endRound(this.attackingTeam, "bomb_exploded");
+        return;
+      }
+    }
+    if (!this.bombInteraction) return;
+    if (!this.interactionIsValid()) {
+      this.cancelBombInteraction(this.bombInteraction.actorId);
+      return;
+    }
+    const { actorId, kind, startedAt, site } = this.bombInteraction;
+    const actor = this.findCombatant(actorId);
+    const duration = kind === "plant" ? COMPETITIVE_RULES.plantSeconds : actor.hasDefuseKit ? COMPETITIVE_RULES.kitDefuseSeconds : COMPETITIVE_RULES.defuseSeconds;
+    this.bomb.progress = clamp((now - startedAt) / (duration * 1000), 0, 1);
+    if (this.bomb.progress < 1) return;
+    this.bombInteraction = null;
+    if (kind === "plant") {
+      this.bomb = { ...this.bomb, status: "planted", carrierId: null, site, position: bombPosition(actor.position), progress: 0, remainingSeconds: COMPETITIVE_RULES.bombSeconds };
+      this.bombPlantedAt = now;
+      this.phaseRemaining = COMPETITIVE_RULES.bombSeconds;
+    } else {
+      this.bomb.status = "defused";
+      this.bomb.progress = 1;
+      this.bomb.remainingSeconds = 0;
+      this.endRound(this.defendingTeam, "bomb_defused");
+    }
+  }
+
+  findCombatant(id) {
+    return this.players.get(id) ?? this.bots.find((bot) => bot.id === id) ?? null;
+  }
+
+  botObjective(bot) {
+    if (bot.team === this.defendingTeam && this.isBombPlanted()) return this.bomb.position;
+    if (bot.team !== this.attackingTeam) return null;
+    if (this.bomb.status === "dropped") return this.bomb.position;
+    if (this.bomb.carrierId === bot.id) return bot.slot % 2 === 0 ? BOMB_SITES.A : BOMB_SITES.B;
+    return null;
+  }
+
+  botWaypoint(bot, destination) {
+    return nextNavigationWaypoint(bot.position, destination);
   }
 
   updateBots(deltaSeconds, now) {
     for (const bot of this.bots) {
       if (!bot.alive) continue;
+      const objective = this.botObjective(bot);
       const enemies = [
-        ...this.connectedPlayers().filter((player) => player.alive && player.team !== bot.team).map((entity) => ({ kind: "player", entity })),
+        ...[...this.players.values()].filter((player) => player.alive && player.team !== bot.team).map((entity) => ({ kind: "player", entity })),
         ...this.bots.filter((candidate) => candidate.alive && candidate.team !== bot.team).map((entity) => ({ kind: "bot", entity })),
       ];
-      if (!enemies.length) continue;
-      const target = enemies.reduce((nearest, candidate) => distance(candidate.entity.position, bot.position) < distance(nearest.entity.position, bot.position) ? candidate : nearest);
-      const targetDistance = distance(bot.position, target.entity.position);
-      if (targetDistance > 8) moveBotToward(bot, target.entity.position, deltaSeconds * 1.35);
-      if (targetDistance <= 20 && now >= bot.nextShotAt) {
-        bot.nextShotAt = now + 850 + bot.index * 90;
+      const target = this.chooseBotTarget(bot, enemies, now);
+      const targetPosition = target?.position ?? null;
+      const targetDistance = targetPosition ? distance(bot.position, targetPosition) : Infinity;
+      const destination = objective ?? (targetPosition && (!target.visible || targetDistance > 8) ? targetPosition : target?.visible ? botCombatStep(bot, targetPosition, now) : null);
+      if (destination && this.bombInteraction?.actorId !== bot.id) moveBotToward(bot, this.botWaypoint(bot, destination), deltaSeconds * 2.8);
+      if (this.bomb.status === "dropped" && bot.team === this.attackingTeam && planarDistance(bot.position, this.bomb.position) <= 1.8) this.pickupBomb(bot.id);
+      if (this.bomb.carrierId === bot.id && this.siteAt(bot.position) && !this.bombInteraction) this.beginBombInteraction(bot.id, "plant", now);
+      if (bot.team === this.defendingTeam && this.isBombPlanted() && planarDistance(bot.position, this.bomb.position) <= 2.5 && !this.bombInteraction) this.beginBombInteraction(bot.id, "defuse", now);
+      if (!target?.visible || targetDistance > BOT_VIEW_DISTANCE || now < target.visibleSince + BOT_REACTION_MS) continue;
+      if (now >= bot.nextShotAt) {
+        bot.nextShotAt = now + botShotInterval(bot);
         const origin = { x: bot.position.x, y: bot.position.y + 0.72, z: bot.position.z };
-        const shotDirection = normalize(subtract(target.entity.position, origin));
+        const shotTarget = combatantAimPoint(target.kind, target.entity);
+        const shotDirection = normalize(subtract(shotTarget, origin));
         const wallDistance = nearestColliderHit(origin, shotDirection, targetDistance);
         if (wallDistance !== null && wallDistance < targetDistance - 0.5) continue;
-        if (deterministicChance(now, bot.index) < Math.max(0.18, 0.58 - targetDistance * 0.015)) {
+        bot.lastShotAt = now;
+        bot.lastShotTarget = { ...shotTarget };
+        if (deterministicChance(now, bot.index) < botHitChance(targetDistance)) {
           const hit = nearestCombatantHit(origin, shotDirection, this.players, this.bots, bot.id);
           if (!hit || hit.team === bot.team) continue;
           const victim = hit.entity;
@@ -420,8 +725,10 @@ export class RoomState {
             if (victim.health === 0) victim.alive = false;
           }
           if (wasAlive && !victim.alive) {
+            this.cancelBombInteraction(victim.id);
             if (hit.kind === "player") this.dropPlayerWeapon(victim);
             else {
+              if (this.bomb.carrierId === victim.id) this.dropBomb(victim.position);
               const weapon = WEAPON_CATALOG[victim.weaponId];
               this.createDrop(victim.weaponId, weapon.magazineSize, Math.floor(weapon.reserveAmmo * 0.5), botDropPosition(victim));
             }
@@ -432,6 +739,39 @@ export class RoomState {
     this.evaluateElimination();
   }
 
+  chooseBotTarget(bot, enemies, now) {
+    const seen = [];
+    const aliveEnemyIds = new Set(enemies.map((candidate) => candidate.entity.id));
+    for (const key of [...bot.enemyMemory.keys()]) {
+      const memory = bot.enemyMemory.get(key);
+      if (!aliveEnemyIds.has(key) || now - memory.seenAt > BOT_MEMORY_MS) bot.enemyMemory.delete(key);
+    }
+
+    for (const candidate of enemies) {
+      const visible = botCanSeeCombatant(bot, candidate.kind, candidate.entity);
+      if (!visible) continue;
+      const previous = bot.enemyMemory.get(candidate.entity.id);
+      const position = combatantAimPoint(candidate.kind, candidate.entity);
+      const memory = {
+        kind: candidate.kind,
+        entity: candidate.entity,
+        position,
+        seenAt: now,
+        visibleSince: previous && now - previous.seenAt <= BOT_MEMORY_MS ? previous.visibleSince : now,
+      };
+      bot.enemyMemory.set(candidate.entity.id, memory);
+      seen.push({ ...memory, visible: true });
+    }
+
+    if (seen.length) return seen.reduce((nearest, candidate) => distance(candidate.position, bot.position) < distance(nearest.position, bot.position) ? candidate : nearest);
+
+    const remembered = [...bot.enemyMemory.values()]
+      .filter((memory) => now - memory.seenAt <= BOT_MEMORY_MS)
+      .map((memory) => ({ ...memory, visible: false }));
+    if (!remembered.length) return null;
+    return remembered.reduce((nearest, candidate) => distance(candidate.position, bot.position) < distance(nearest.position, bot.position) ? candidate : nearest);
+  }
+
   chooseTeam() {
     const counts = Object.fromEntries(TEAMS.map((team) => [team, [...this.players.values()].filter((player) => player.team === team).length]));
     if (counts.alpha !== counts.bravo) return counts.alpha < counts.bravo ? "alpha" : "bravo";
@@ -440,7 +780,7 @@ export class RoomState {
 
   rebalanceBots(reset = false) {
     const humanCounts = Object.fromEntries(TEAMS.map((team) => [team, [...this.players.values()].filter((player) => player.team === team).length]));
-    const squadSize = Math.max(2, Math.max(humanCounts.alpha, humanCounts.bravo) + 1);
+    const squadSize = COMPETITIVE_RULES.teamSize;
     const existing = new Map(this.bots.map((bot) => [bot.id, bot]));
     const nextBots = [];
     for (const team of TEAMS) {
@@ -448,8 +788,8 @@ export class RoomState {
       const slots = TEAM_SPAWNS[team].map((_, index) => index).filter((index) => !occupied.has(index)).slice(0, squadSize - humanCounts[team]);
       for (const slot of slots) {
         const id = `bot-${team}-${slot + 1}`;
-        const bot = existing.get(id) ?? createBot(team, slot);
-        if (reset) resetBotForRound(bot);
+        const bot = existing.get(id) ?? createBot(team, slot, this.spawnForTeam(team, slot));
+        if (reset) resetBotForRound(bot, this.spawnForTeam(team, slot), this.round === 1 || this.round === COMPETITIVE_RULES.halfRounds + 1);
         nextBots.push(bot);
       }
     }
@@ -458,33 +798,37 @@ export class RoomState {
 
   evaluateElimination() {
     if (this.phase !== "LIVE") return;
-    const alphaAlive = this.teamStrength("alpha").alive;
-    const bravoAlive = this.teamStrength("bravo").alive;
-    if (alphaAlive === 0 && bravoAlive === 0) this.endRound(null);
-    else if (alphaAlive === 0) this.endRound("bravo");
-    else if (bravoAlive === 0) this.endRound("alpha");
-  }
-
-  timeoutWinner() {
-    const alpha = this.teamStrength("alpha");
-    const bravo = this.teamStrength("bravo");
-    if (alpha.alive !== bravo.alive) return alpha.alive > bravo.alive ? "alpha" : "bravo";
-    if (alpha.health !== bravo.health) return alpha.health > bravo.health ? "alpha" : "bravo";
-    return null;
+    const attackersAlive = this.teamStrength(this.attackingTeam).alive;
+    const defendersAlive = this.teamStrength(this.defendingTeam).alive;
+    if (attackersAlive === 0 && !this.isBombPlanted()) this.endRound(this.defendingTeam, "attackers_eliminated");
+    else if (defendersAlive === 0) this.endRound(this.attackingTeam, "defenders_eliminated");
   }
 
   teamStrength(team) {
     const members = [
-      ...this.connectedPlayers().filter((player) => player.team === team && player.alive),
+      ...[...this.players.values()].filter((player) => player.team === team && player.alive),
       ...this.bots.filter((bot) => bot.team === team && bot.alive),
     ];
     return { alive: members.length, health: members.reduce((total, member) => total + member.health, 0) };
   }
 
   dropPlayerWeapon(player) {
-    if (player.weaponId === "px9") return null;
-    const dropped = this.createDrop(player.weaponId, player.magazine, player.reserve, dropPositionForPlayer(player));
-    equipWeapon(player, "px9");
+    if (!player.alive && this.bomb.carrierId === player.id) this.dropBomb(player.position);
+    saveActiveWeapon(player);
+    const slot = !player.alive && player.primaryWeaponId ? "primary" : player.activeSlot;
+    const weaponId = slot === "primary" ? player.primaryWeaponId : player.secondaryWeaponId;
+    if (!weaponId || weaponId === "px9") return null;
+    const ammo = slot === "primary" ? player.primaryAmmo : player.secondaryAmmo;
+    const dropped = this.createDrop(weaponId, ammo.magazine, ammo.reserve, dropPositionForPlayer(player));
+    if (slot === "primary") {
+      player.primaryWeaponId = null;
+      player.primaryAmmo = null;
+      activateWeaponSlot(player, "secondary");
+    } else {
+      player.secondaryWeaponId = "px9";
+      player.secondaryAmmo = defaultAmmo("px9");
+      activateWeaponSlot(player, "secondary");
+    }
     return dropped;
   }
 
@@ -508,28 +852,45 @@ export class RoomState {
   }
 }
 
-function createBot(team, slot) {
-  const spawn = TEAM_SPAWNS[team][slot] ?? TEAM_SPAWNS[team][0];
+function createBot(team, slot, spawn) {
   return {
     id: `bot-${team}-${slot + 1}`,
     team,
     slot,
-    index: (team === "alpha" ? 0 : 4) + slot,
-    level: "ground",
+    index: (team === "alpha" ? 0 : COMPETITIVE_RULES.teamSize) + slot,
     position: { x: spawn.x, y: 1, z: spawn.z },
     health: 100,
     alive: true,
-    weaponId: slot === 1 ? "vx7" : "px9",
+    weaponId: "px9",
     nextShotAt: 0,
+    lastShotAt: -Infinity,
+    lastShotTarget: null,
+    enemyMemory: new Map(),
   };
 }
 
-function resetBotForRound(bot) {
-  const spawn = TEAM_SPAWNS[bot.team][bot.slot] ?? TEAM_SPAWNS[bot.team][0];
+function resetBotForRound(bot, spawn, pistolRound) {
   bot.position = { x: spawn.x, y: 1, z: spawn.z };
   bot.health = 100;
   bot.alive = true;
   bot.nextShotAt = 0;
+  bot.lastShotAt = -Infinity;
+  bot.lastShotTarget = null;
+  bot.enemyMemory.clear();
+  bot.weaponId = pistolRound ? "px9" : bot.slot % 2 === 0 ? "br4" : "vx7";
+}
+
+function publicBot(bot) {
+  const shotTarget = bot.lastShotTarget ? { ...bot.lastShotTarget } : null;
+  return {
+    id: bot.id,
+    team: bot.team,
+    position: { ...bot.position },
+    health: bot.health,
+    alive: bot.alive,
+    weaponId: bot.weaponId,
+    ...(Number.isFinite(bot.lastShotAt) ? { lastShotAt: bot.lastShotAt, lastShotTarget: shotTarget } : {}),
+  };
 }
 
 function publicPlayer(player) {
@@ -543,8 +904,12 @@ function publicPlayer(player) {
     health: player.health,
     armor: player.armor,
     helmet: player.helmet,
+    hasDefuseKit: player.hasDefuseKit,
     balance: player.balance,
     weaponId: player.weaponId,
+    primaryWeaponId: player.primaryWeaponId,
+    secondaryWeaponId: player.secondaryWeaponId,
+    activeSlot: player.activeSlot,
     magazine: player.magazine,
     reserve: player.reserve,
     reloading: player.reloadCompletesAt !== null,
@@ -554,34 +919,108 @@ function publicPlayer(player) {
   };
 }
 
-function resetPlayerForRound(player, now) {
+function resetPlayerForRound(player, spawn, now) {
   if (!player.alive) {
-    player.weaponId = "px9";
+    player.primaryWeaponId = null;
+    player.primaryAmmo = null;
+    player.secondaryWeaponId = "px9";
+    player.secondaryAmmo = defaultAmmo("px9");
+    player.activeSlot = "secondary";
     player.armor = 0;
     player.helmet = false;
+    player.hasDefuseKit = false;
+  } else saveActiveWeapon(player);
+  if (!player.primaryWeaponId) player.activeSlot = "secondary";
+  activateWeaponSlot(player, player.activeSlot);
+  if (player.primaryAmmo) {
+    const weapon = WEAPON_CATALOG[player.primaryWeaponId];
+    player.primaryAmmo = { magazine: weapon.magazineSize, reserve: weapon.reserveAmmo };
   }
-  const spawn = TEAM_SPAWNS[player.team][player.spawnIndex] ?? TEAM_SPAWNS[player.team][0];
-  const weapon = WEAPON_CATALOG[player.weaponId];
+  const secondary = WEAPON_CATALOG[player.secondaryWeaponId];
+  player.secondaryAmmo = { magazine: secondary.magazineSize, reserve: secondary.reserveAmmo };
+  activateWeaponSlot(player, player.activeSlot);
   player.position = { ...spawn };
-  player.yaw = player.team === "alpha" ? 0 : Math.PI;
+  player.yaw = spawn.z < 0 ? 0 : Math.PI;
   player.health = 100;
-  player.magazine = weapon.magazineSize;
-  player.reserve = weapon.reserveAmmo;
   player.alive = true;
   player.ready = false;
   player.lastInputAt = now;
   player.lastSequence = -1;
   player.movementCredit = 0;
+  player.movementWindowStartedAt = now;
+  player.movementWindowDistance = 0;
+  player.movingUntil = 0;
   player.lastShotAt = -Infinity;
   player.reloadCompletesAt = null;
 }
 
 function equipWeapon(player, weaponId) {
+  saveActiveWeapon(player);
   const weapon = WEAPON_CATALOG[weaponId];
+  if (weapon.slot === "primary") {
+    player.primaryWeaponId = weaponId;
+    player.primaryAmmo = defaultAmmo(weaponId);
+  } else {
+    player.secondaryWeaponId = weaponId;
+    player.secondaryAmmo = defaultAmmo(weaponId);
+  }
+  activateWeaponSlot(player, weapon.slot);
+}
+
+function saveActiveWeapon(player) {
+  const weapon = WEAPON_CATALOG[player.weaponId];
+  if (!weapon) return;
+  player.activeSlot = weapon.slot;
+  const ammo = { magazine: player.magazine, reserve: player.reserve };
+  if (weapon.slot === "primary") {
+    player.primaryWeaponId = player.weaponId;
+    player.primaryAmmo = ammo;
+  } else {
+    player.secondaryWeaponId = player.weaponId;
+    player.secondaryAmmo = ammo;
+  }
+}
+
+function activateWeaponSlot(player, slot) {
+  const weaponId = slot === "primary" ? player.primaryWeaponId : player.secondaryWeaponId;
+  const ammo = slot === "primary" ? player.primaryAmmo : player.secondaryAmmo;
+  if (!weaponId || !ammo) return false;
+  player.activeSlot = slot;
   player.weaponId = weaponId;
-  player.magazine = weapon.magazineSize;
-  player.reserve = weapon.reserveAmmo;
+  player.magazine = ammo.magazine;
+  player.reserve = ammo.reserve;
   player.reloadCompletesAt = null;
+  return true;
+}
+
+function defaultAmmo(weaponId) {
+  const weapon = WEAPON_CATALOG[weaponId];
+  return { magazine: weapon.magazineSize, reserve: weapon.reserveAmmo };
+}
+
+function resetPlayerEconomy(player) {
+  player.balance = 800;
+  player.armor = 0;
+  player.helmet = false;
+  player.hasDefuseKit = false;
+  player.primaryWeaponId = null;
+  player.primaryAmmo = null;
+  player.secondaryWeaponId = "px9";
+  player.secondaryAmmo = defaultAmmo("px9");
+  player.activeSlot = "secondary";
+  activateWeaponSlot(player, "secondary");
+}
+
+function emptyBomb() {
+  return { status: "dropped", carrierId: null, planterId: null, defuserId: null, site: null, position: bombPosition(TEAM_SPAWNS.alpha[0]), progress: 0, remainingSeconds: 0 };
+}
+
+function bombPosition(position) {
+  return { x: position.x, y: 0.32, z: position.z };
+}
+
+function planarDistance(a, b) {
+  return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
 function damagePlayer(player, rawDamage, { headshot = false, armorPenetration = 0.5 } = {}) {
@@ -596,12 +1035,58 @@ function damagePlayer(player, rawDamage, { headshot = false, armorPenetration = 
 }
 
 function moveBotToward(bot, target, distanceToMove) {
-  if (bot.level === "bridge") {
-    const bridgeTarget = { x: clamp(target.x, -5, 5), y: bot.position.y, z: clamp(target.z, 15, 19) };
-    moveBotCandidate(bot, bridgeTarget, distanceToMove);
-    return;
-  }
   moveBotCandidate(bot, { x: target.x, y: bot.position.y, z: target.z }, distanceToMove);
+}
+
+function nextNavigationWaypoint(position, destination) {
+  const flatDestination = { x: destination.x, y: position.y, z: destination.z };
+  if (sweptPositionIsClear(position, flatDestination, BOT_RADIUS)) return flatDestination;
+
+  // Work backwards from every node that can see the destination. Each edge
+  // points to the next safe waypoint, so a bot can reroute after every tick.
+  const distanceToGoal = new Map();
+  const nextHop = new Map();
+  const unsettled = new Set();
+  for (const point of MAP_NAV_POINTS) {
+    const node = { x: point.x, y: position.y, z: point.z };
+    if (!sweptPositionIsClear(node, flatDestination, BOT_RADIUS)) continue;
+    distanceToGoal.set(point.id, planarDistance(node, flatDestination));
+    unsettled.add(point.id);
+  }
+  while (unsettled.size) {
+    let currentId = null;
+    for (const id of unsettled) {
+      if (currentId === null || distanceToGoal.get(id) < distanceToGoal.get(currentId)) currentId = id;
+    }
+    unsettled.delete(currentId);
+    const current = NAV_POINT_BY_ID.get(currentId);
+    for (const point of MAP_NAV_POINTS) {
+      if (!point.neighbors.includes(currentId)) continue;
+      if (!sweptPositionIsClear({ x: point.x, y: position.y, z: point.z }, { x: current.x, y: position.y, z: current.z }, BOT_RADIUS)) continue;
+      const candidateDistance = distanceToGoal.get(currentId) + planarDistance(point, current);
+      if (candidateDistance >= (distanceToGoal.get(point.id) ?? Infinity)) continue;
+      distanceToGoal.set(point.id, candidateDistance);
+      nextHop.set(point.id, currentId);
+      unsettled.add(point.id);
+    }
+  }
+
+  let start = null;
+  let bestCost = Infinity;
+  for (const point of MAP_NAV_POINTS) {
+    if (!distanceToGoal.has(point.id)) continue;
+    const node = { x: point.x, y: position.y, z: point.z };
+    if (!sweptPositionIsClear(position, node, BOT_RADIUS)) continue;
+    const cost = planarDistance(position, node) + distanceToGoal.get(point.id);
+    if (cost < bestCost) {
+      bestCost = cost;
+      start = point;
+    }
+  }
+  if (!start) return flatDestination;
+  if (planarDistance(position, start) > 0.5) return { x: start.x, y: position.y, z: start.z };
+  const next = NAV_POINT_BY_ID.get(nextHop.get(start.id));
+  return next ? { x: next.x, y: position.y, z: next.z } : flatDestination;
 }
 
 function moveBotCandidate(bot, target, distanceToMove) {
@@ -611,7 +1096,7 @@ function moveBotCandidate(bot, target, distanceToMove) {
   if (length < 0.001) return;
   const step = Math.min(length, distanceToMove);
   const direct = add(bot.position, scale(delta, step / length));
-  if (sweptPositionIsClear(bot.position, direct, 0.42)) {
+  if (isWithinArena(direct) && sweptPositionIsClear(bot.position, direct, BOT_RADIUS)) {
     bot.position = direct;
     return;
   }
@@ -620,15 +1105,52 @@ function moveBotCandidate(bot, target, distanceToMove) {
     { x: bot.position.x - step, y: bot.position.y, z: bot.position.z },
     { x: bot.position.x, y: bot.position.y, z: bot.position.z + step },
     { x: bot.position.x, y: bot.position.y, z: bot.position.z - step },
-  ].filter((candidate) => isWithinArena(candidate) && sweptPositionIsClear(bot.position, candidate, 0.42));
+  ].filter((candidate) => isWithinArena(candidate) && sweptPositionIsClear(bot.position, candidate, BOT_RADIUS));
   candidates.sort((a, b) => distance(a, target) - distance(b, target));
   if (candidates[0]) bot.position = candidates[0];
+}
+
+function botCanSeeCombatant(bot, kind, entity) {
+  const target = combatantAimPoint(kind, entity);
+  const distanceToTarget = distance(bot.position, target);
+  if (distanceToTarget > BOT_VIEW_DISTANCE) return false;
+  const origin = { x: bot.position.x, y: bot.position.y + 0.72, z: bot.position.z };
+  const direction = normalize(subtract(target, origin));
+  const wallDistance = nearestColliderHit(origin, direction, distanceToTarget);
+  return wallDistance === null || wallDistance >= distanceToTarget - 0.35;
+}
+
+function botShotInterval(bot) {
+  const weapon = WEAPON_CATALOG[bot.weaponId] ?? WEAPON_CATALOG.px9;
+  return Math.max(160, 60_000 / weapon.roundsPerMinute) + bot.index * 18;
+}
+
+function botHitChance(targetDistance) {
+  const longRangePenalty = Math.max(0, targetDistance - 22) * 0.01;
+  return Math.max(0.14, 0.6 - targetDistance * 0.012 - longRangePenalty);
+}
+
+function botCombatStep(bot, target, now) {
+  const range = planarDistance(bot.position, target);
+  if (range > 12 || range < 3.2) return null;
+  const lateral = normalize({ x: target.z - bot.position.z, y: 0, z: bot.position.x - target.x });
+  const side = Math.floor(now / 900 + bot.index) % 2 === 0 ? 1 : -1;
+  return {
+    x: bot.position.x + lateral.x * side * 0.9,
+    y: bot.position.y,
+    z: bot.position.z + lateral.z * side * 0.9,
+  };
+}
+
+function combatantAimPoint(kind, entity) {
+  if (kind === "player") return { x: entity.position.x, y: entity.position.y - 0.22, z: entity.position.z };
+  return { x: entity.position.x, y: entity.position.y + 0.62, z: entity.position.z };
 }
 
 function nearestCombatantHit(origin, direction, players, bots, excludedId) {
   let result = null;
   const combatants = [
-    ...[...players.values()].filter((player) => player.connected).map((entity) => ({ kind: "player", entity })),
+    ...[...players.values()].map((entity) => ({ kind: "player", entity })),
     ...bots.map((entity) => ({ kind: "bot", entity })),
   ];
   for (const { kind, entity } of combatants) {
@@ -644,7 +1166,7 @@ function nearestCombatantHit(origin, direction, players, bots, excludedId) {
     const candidate = headAlong !== null
       ? { kind, entity, team: entity.team, zone: "head", along: headAlong }
       : bodyAlong !== null ? { kind, entity, team: entity.team, zone: "body", along: bodyAlong } : null;
-    if (candidate && candidate.along <= 120 && (!result || candidate.along < result.along)) result = candidate;
+    if (candidate && candidate.along <= MAX_SHOT_DISTANCE && (!result || candidate.along < result.along)) result = candidate;
   }
   return result;
 }
@@ -695,7 +1217,10 @@ function collider(dimensions, position) {
 }
 
 function isWithinArena(position) {
-  return Math.abs(position.x) <= 19.5 && position.z >= -24.5 && position.z <= 24.5;
+  return position.x >= ARENA_BOUNDS.minX + ARENA_BOUNDS.playerPadding
+    && position.x <= ARENA_BOUNDS.maxX - ARENA_BOUNDS.playerPadding
+    && position.z >= ARENA_BOUNDS.minZ + ARENA_BOUNDS.playerPadding
+    && position.z <= ARENA_BOUNDS.maxZ - ARENA_BOUNDS.playerPadding;
 }
 
 function isPlausiblePlayerHeight(position) {
